@@ -6,13 +6,13 @@ ESP32-S3를 사용한 온습도 센서 및 환경 예측 지수(CEI) 모니터�
 
 - **MCU**: ESP32-S3 Super Mini
 - **센서**: SHT-45 (온도/습도 센서)
-- **디스플레이**: 0.91" OLED (SSD1306, I2C)
-- **통신**: I2C (GPIO8=SDA, GPIO9=SCL)
+- **디스플레이**: 2.13" E-Paper (SSD1680, SPI)
+- **통신**: I2C (센서), SPI (디스플레이)
 
 ## 기능
 
 - ✅ SHT-45 센서를 통한 온습도 측정
-- ✅ 0.91" OLED에 실시간 데이터 표시
+- ✅ 2.13" E-Paper에 실시간 데이터 표시
 - ✅ **Coffee Environment Index (CEI)** 계산 및 표시 (1~100 절대 지수)
 - ✅ 더미 센서 모드 (센서 없이 테스트 가능)
 - ✅ **Bluetooth LE 통신** (앱 연동 가능)
@@ -27,15 +27,15 @@ ESP32-S3를 사용한 온습도 센서 및 환경 예측 지수(CEI) 모니터�
 | SCL    | GPIO 9   |
 | GND    | GND      |
 
-### 0.91" OLED 디스플레이
-| OLED   | ESP32-S3 |
-|--------|----------|
-| VCC    | 3.3V     |
-| SDA    | GPIO 8   |
-| SCL    | GPIO 9   |
-| GND    | GND      |
-
-**주의**: SHT-45와 OLED는 동일한 I2C 버스를 공유합니다.
+### 2.13" E-Paper 디스플레이 (SPI)
+| E-Paper | ESP32-C3 |
+|---------|----------|
+| BUSY    | GPIO 10  |
+| RST     | GPIO 3   |
+| DC      | GPIO 4   |
+| CS      | GPIO 5   |
+| CLK     | GPIO 6   |
+| DIN     | GPIO 7   |
 
 ## 빌드 및 업로드
 
@@ -196,46 +196,45 @@ BLE 기능이 필요 없다면:
   }
   ```
 
-## OLED 디스플레이 정보
-
-- **해상도**: 128x32 픽셀
-- **I2C 주소**: 0x3C
-- **프로토콜**: I2C
-- **표시 내용**:
-  - Temp: XX.X°C
-  - Humi: XX.X%
-  - CEI: XX.X
-
 ## 프로젝트 구조
 
 ```
 CEI-SENSOR/
 ├── include/
-│   ├── sht45.h          # SHT-45 센서 드라이버 헤더
-│   ├── ssd1306.h        # OLED 디스플레이 드라이버 헤더
-│   ├── cei_calculator.h # CEI 계산 라이브러리 헤더
-│   └── ble_server.h     # BLE 서버 헤더
+│   ├── app_config.h       # 전역 설정 (핀, 타이밍, 기능 플래그)
+│   ├── sht45.h            # SHT-45 센서 드라이버
+│   ├── epd_driver.h       # E-Paper 디스플레이 드라이버 (SSD1680)
+│   ├── epd_ui.h           # E-Paper UI 레이어
+│   ├── display_service.h  # 디스플레이 서비스
+│   ├── sensor_service.h   # 센서 서비스
+│   ├── power_manager.h    # 전원/슬립 관리
+│   ├── battery_monitor.h  # 배터리 모니터
+│   ├── cess_calculator.h  # CESS 계산 라이브러리
+│   ├── eml_calculator.h   # EML 계산 라이브러리
+│   └── ble_server.h       # BLE 서버
 ├── src/
-│   ├── main.c           # 메인 애플리케이션
-│   ├── sht45.c          # SHT-45 센서 드라이버
-│   ├── ssd1306.c        # OLED 디스플레이 드라이버
-│   ├── cei_calculator.c # CEI 계산 라이브러리 구현
-│   ├── ble_server.c     # BLE 서버 구현
-│   └── CMakeLists.txt   # 빌드 설정
-├── CMakeLists.txt       # 프로젝트 설정
-├── platformio.ini       # PlatformIO 설정
-└── sdkconfig.defaults   # ESP-IDF 설정
+│   ├── main.c             # 메인 애플리케이션 (상태 머신)
+│   ├── sht45.c            # SHT-45 센서 드라이버
+│   ├── epd_driver.c       # E-Paper 드라이버 구현
+│   ├── epd_ui.c           # E-Paper UI 구현
+│   ├── display_service.c  # 디스플레이 서비스
+│   ├── sensor_service.c   # 센서 서비스
+│   ├── power_manager.c    # 전원 관리
+│   ├── battery_monitor.c  # 배터리 모니터
+│   ├── cess_calculator.c  # CESS 계산
+│   ├── eml_calculator.c   # EML 계산
+│   ├── ble_server.c       # BLE 서버 구현
+│   └── CMakeLists.txt     # 빌드 설정
+├── CMakeLists.txt         # 프로젝트 설정
+├── platformio.ini         # PlatformIO 설정
+└── sdkconfig.defaults     # ESP-IDF 설정
 ```
 
 ## 문제 해결
 
 ### 센서가 감지되지 않음
 1. I2C 연결 확인 (SDA, SCL, VCC, GND)
-2. 더미 센서 모드로 OLED 동작 확인: `#define USE_DUMMY_SENSOR 1`
-
-### OLED에 아무것도 표시되지 않음
-1. I2C 주소 확인 (기본값: 0x3C)
-2. `include/ssd1306.h`에서 주소 변경 가능
+2. 더미 센서 모드로 동작 확인: `app_config.h`에서 `APP_USE_DUMMY_SENSOR 1`
 
 ### Bluetooth 컴파일 오류
 현재 설정이 올바르게 되어 있어 오류가 발생하지 않아야 합니다.

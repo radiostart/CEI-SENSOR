@@ -20,10 +20,10 @@ static const uint8_t char_uuid[16] = {
     0xab, 0x26, 0x1b, 0x36, 0x07, 0xea, 0xf5, 0xb7,
     0x88, 0x46, 0xe1, 0x36, 0x3e, 0x48, 0xb5, 0xbe};
 
-// 광고 파라미터
+// 광고 파라미터 (배터리 절약: 100~200ms 간격)
 static esp_ble_adv_params_t adv_params = {
-    .adv_int_min = 0x20,
-    .adv_int_max = 0x40,
+    .adv_int_min = 0xA0,   // 160 × 0.625ms = 100ms
+    .adv_int_max = 0x140,  // 320 × 0.625ms = 200ms
     .adv_type = ADV_TYPE_IND,
     .own_addr_type = BLE_ADDR_TYPE_PUBLIC,
     .channel_map = ADV_CHNL_ALL,
@@ -33,13 +33,17 @@ static esp_ble_adv_params_t adv_params = {
 // 광고 데이터 설정 완료 플래그
 static bool adv_data_ready = false;
 static bool scan_rsp_ready = false;
+// 광고 활성화 플래그 (pause/resume 상태 추적)
+static bool s_advertising_enabled = false;
 
 void ble_server_pause(void) {
+  s_advertising_enabled = false;
   esp_ble_gap_stop_advertising();
   ESP_LOGI(TAG, "BLE Advertising Stopped");
 }
 
 void ble_server_resume(void) {
+  s_advertising_enabled = true;
   esp_ble_gap_start_advertising(&adv_params);
   ESP_LOGI(TAG, "BLE Advertising Resumed");
 }
@@ -49,13 +53,13 @@ static void gap_event_handler(esp_gap_ble_cb_event_t event,
   switch (event) {
   case ESP_GAP_BLE_ADV_DATA_RAW_SET_COMPLETE_EVT:
     adv_data_ready = true;
-    if (scan_rsp_ready) {
+    if (scan_rsp_ready && s_advertising_enabled) {
       esp_ble_gap_start_advertising(&adv_params);
     }
     break;
   case ESP_GAP_BLE_SCAN_RSP_DATA_RAW_SET_COMPLETE_EVT:
     scan_rsp_ready = true;
-    if (adv_data_ready) {
+    if (adv_data_ready && s_advertising_enabled) {
       esp_ble_gap_start_advertising(&adv_params);
     }
     break;
@@ -105,7 +109,9 @@ static void gatts_event_handler(esp_gatts_cb_event_t event,
   }
 
   case ESP_GATTS_DISCONNECT_EVT:
-    esp_ble_gap_start_advertising(&adv_params);
+    if (s_advertising_enabled) {
+      esp_ble_gap_start_advertising(&adv_params);
+    }
     break;
 
   default:
@@ -124,6 +130,9 @@ esp_err_t ble_server_init(void) {
   ret = esp_bt_controller_enable(ESP_BT_MODE_BLE);
   if (ret)
     return ret;
+
+  // BT 컨트롤러 슬립 활성화 (광고 중지 시 저전력 모드 진입)
+  esp_bt_sleep_enable();
 
   ret = esp_bluedroid_init();
   if (ret)
@@ -148,8 +157,11 @@ esp_err_t ble_server_init(void) {
   // TX Power 설정 (저전력)
   esp_ble_tx_power_set(ESP_BLE_PWR_TYPE_ADV, ESP_PWR_LVL_N0);
 
-  // 초기 광고 데이터 설정 (0값으로 시작)
+  // 초기 광고 데이터 설정 (0값으로 시작, 아직 광고 비활성 상태)
   ble_update_advertising_data(0.0f, 0.0f, 0.0f);
+
+  // 초기 상태: 광고 비활성 (첫 데이터 업데이트 시 resume으로 활성화)
+  s_advertising_enabled = false;
 
   return ESP_OK;
 }

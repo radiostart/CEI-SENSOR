@@ -12,9 +12,6 @@
 
 static const char *TAG = "DISPLAY_SVC";
 
-// 부분 갱신 카운터 (주기적 전체 갱신용)
-static int s_partial_refresh_count = 0;
-
 esp_err_t display_service_init(void) {
   int ret = ui_init();
   if (ret != 0) {
@@ -43,13 +40,9 @@ void display_service_update(const sensor_data_t *data, int battery_pct) {
   // UI 업데이트
   ui_update_from_sensors(temp_x10, hum_x10, cess_int, 50);
   ui_render_partial();
-  
-  // 부분 갱신 카운터 증가
-  s_partial_refresh_count++;
 
-  ESP_LOGD(TAG, "Display updated: T=%d.%d, H=%d.%d, CESS=%d (partial #%d)",
-           temp_x10 / 10, temp_x10 % 10, hum_x10 / 10, hum_x10 % 10, cess_int,
-           s_partial_refresh_count);
+  ESP_LOGD(TAG, "Display updated: T=%d.%d, H=%d.%d, CESS=%d",
+           temp_x10 / 10, temp_x10 % 10, hum_x10 / 10, hum_x10 % 10, cess_int);
 }
 
 void display_service_show_power_off(void) {
@@ -75,17 +68,4 @@ void display_service_sleep(void) {
 void display_service_wakeup(void) {
   epd_wakeup();
   ESP_LOGD(TAG, "Display wakeup");
-}
-
-bool display_service_needs_full_refresh(void) {
-#if APP_EPD_FULL_REFRESH_INTERVAL > 0
-  return s_partial_refresh_count >= APP_EPD_FULL_REFRESH_INTERVAL;
-#else
-  return false;
-#endif
-}
-
-void display_service_reset_refresh_counter(void) {
-  s_partial_refresh_count = 0;
-  ESP_LOGD(TAG, "Refresh counter reset");
 }

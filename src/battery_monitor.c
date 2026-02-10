@@ -25,11 +25,14 @@ static const char *TAG = "BATTERY";
 // some) ESP32-C3 ADC1 Attenuation: 11dB: 150mV ~ 2450mV recommended. 2.1V fits
 // perfectly.
 
-static adc_oneshot_unit_handle_t adc1_handle;
+static adc_oneshot_unit_handle_t adc1_handle = NULL;
 static adc_cali_handle_t adc_cali_handle = NULL;
 static bool do_calibration = false;
+static bool s_initialized = false;
 
 void battery_monitor_init(void) {
+  if (s_initialized) return;
+
   ESP_LOGI(TAG, "Initializing Battery Monitor (GPIO 2 / ADC1 CH2)...");
 
   // 1. ADC Unit Config
@@ -62,6 +65,25 @@ void battery_monitor_init(void) {
   } else {
     ESP_LOGE(TAG, "Calibration Fail or Not Supported. Using raw.");
   }
+
+  s_initialized = true;
+}
+
+void battery_monitor_deinit(void) {
+  if (!s_initialized) return;
+
+  if (do_calibration && adc_cali_handle) {
+    adc_cali_delete_scheme_curve_fitting(adc_cali_handle);
+    adc_cali_handle = NULL;
+    do_calibration = false;
+  }
+  if (adc1_handle) {
+    adc_oneshot_del_unit(adc1_handle);
+    adc1_handle = NULL;
+  }
+
+  s_initialized = false;
+  ESP_LOGD(TAG, "Battery monitor deinitialized");
 }
 
 uint32_t battery_read_voltage(void) {

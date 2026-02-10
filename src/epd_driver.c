@@ -123,7 +123,17 @@ static void epd_gpio_init(void) {
   gpio_set_level(EPD_PIN_RST, 1);
 }
 
+static void epd_spi_deinit(void) {
+  if (s_spi) {
+    spi_bus_remove_device(s_spi);
+    s_spi = NULL;
+    spi_bus_free(EPD_SPI_HOST);
+  }
+}
+
 static esp_err_t epd_spi_init(void) {
+  if (s_spi != NULL) return ESP_OK;  // 이미 초기화됨
+
   spi_bus_config_t bus_cfg = {
       .mosi_io_num = EPD_PIN_DIN,
       .miso_io_num = -1,
@@ -515,10 +525,13 @@ int epd_init(void) {
 void epd_sleep(void) {
   epd_send_command(0x10);
   epd_send_data(0x01);
+  // SPI 버스 해제 (슬립 중 전력 절약)
+  epd_spi_deinit();
 }
 
-// Wakeup: Init + Buffer Sync for safety
+// Wakeup: SPI 재초기화 + Init + Buffer Sync for safety
 void epd_wakeup(void) {
+  epd_spi_init();
   epd_init_sequence();
 
   // Sync Controller RAM with current s_fb_new to prevent state mismatch

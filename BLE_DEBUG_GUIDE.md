@@ -34,7 +34,7 @@ pio device monitor --port /dev/cu.usbmodem5ABA0188561 --baud 115200
 1. **시스템 설정** 열기
 2. **Bluetooth** 클릭
 3. "주변 기기" 목록에서 **CEI-Sensor** 찾기
-4. 몇 초 기다려 보기 (광고 인터벌: 20-40ms)
+4. 몇 초 기다려 보기 (광고 인터벌: 100-200ms)
 
 ### 4️⃣ 터미널에서 블루투스 스캔
 ```bash
@@ -132,14 +132,13 @@ E (xxx) BLE_SERVER: Bluedroid 활성화 실패: ...
 ## 📊 예상 정상 로그
 ```
 ====================================
-  ESP32-S3 + OLED [DEMO 모드]
-  ⚠️  랜덤 센서 값 사용 중
+  CEI-SENSOR Starting...
 ====================================
-I (xxx) MAIN: ✅ NVS Flash 초기화 완료!
-I (xxx) MAIN: I2C 버스 초기화 중... (SDA: GPIO8, SCL: GPIO9)
-I (xxx) MAIN: ✅ I2C 버스 초기화 완료!
-I (xxx) MAIN: ✅ OLED 디스플레이 초기화 완료!
-I (xxx) MAIN: BLE 서버 초기화 중...
+I (xxx) MAIN: Initializing NVS...
+I (xxx) POWER_MGR: Power manager initialized
+I (xxx) SENSOR_SVC: Sensor service initialized
+I (xxx) DISPLAY_SVC: Display service initialized
+I (xxx) MAIN: Initializing BLE...
 I (xxx) BLE_SERVER: BLE 서버 초기화 중...
 I (xxx) BLE_SERVER: Bluetooth 컨트롤러 초기화 성공
 I (xxx) BLE_SERVER: Bluetooth 컨트롤러 활성화 성공
@@ -165,7 +164,7 @@ I (xxx) MAIN: 온습도 측정 시작...
 ## 📝 참고
 - **BLE 디바이스 이름**: `CEI-Sensor`
 - **Service UUID**: `4fafc201-1fb5-459e-8fcc-c5c9c331914b`
-- **광고 인터벌**: 20-40ms (0x20-0x40)
+- **광고 인터벌**: 100-200ms (0xA0-0x140)
 - **광고 타입**: `ADV_TYPE_IND` (일반 검색 가능)
 
 ---

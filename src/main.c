@@ -51,9 +51,6 @@ static void app_init_all(void) {
   // 전원 관리자 (버튼 포함)
   power_manager_init();
 
-  // 배터리 모니터
-  battery_monitor_init();
-
   // 센서 서비스
   sensor_service_init();
 
@@ -77,14 +74,7 @@ static void app_init_all(void) {
 static void handle_active_state(void) {
   sensor_data_t data;
 
-  // 디스플레이 웨이크업
-  display_service_wakeup();
-
-#if APP_ENABLE_BLE
-  ble_server_resume();
-#endif
-
-  // 센서 데이터 읽기
+  // 센서 데이터 읽기 (I2C만 사용, 디스플레이/BLE 미활성)
   esp_err_t ret = sensor_service_read(&data);
   if (ret != ESP_OK) {
     ESP_LOGW(TAG, "Sensor read failed");
@@ -101,11 +91,20 @@ static void handle_active_state(void) {
     // 마지막 값 저장
     sensor_service_update_last(&data);
 
-    // 배터리 상태
+    // 디스플레이 웨이크업 (변화 시에만)
+    display_service_wakeup();
+
+#if APP_ENABLE_BLE
+    ble_server_resume();
+#endif
+
+    // 배터리 상태 (ADC on-demand)
+    battery_monitor_init();
     int battery_pct = battery_get_percentage();
+    battery_monitor_deinit();
     ESP_LOGI(TAG, "Battery: %d%%", battery_pct);
 
-    // 디스플레이 업데이트 (epd_ui.c에서 10회마다 자동 전체 갱신)
+    // 디스플레이 업데이트
     display_service_update(&data, battery_pct);
 
 #if APP_ENABLE_BLE
@@ -116,6 +115,8 @@ static void handle_active_state(void) {
     ESP_LOGI(TAG, "Broadcasting...");
     for (int i = 0; i < (APP_BLE_BROADCAST_MS / 100); i++) {
       if (power_manager_handle_button()) {
+        ble_server_pause();
+        display_service_sleep();
         return;  // 상태 변경됨
       }
       vTaskDelay(pdMS_TO_TICKS(100));
@@ -125,12 +126,12 @@ static void handle_active_state(void) {
     ble_server_pause();
     vTaskDelay(pdMS_TO_TICKS(100));
 #endif
+
+    // 디스플레이 슬립
+    display_service_sleep();
   } else {
     ESP_LOGI(TAG, ">>> SKIP (no significant change) <<<");
   }
-
-  // 디스플레이 슬립
-  display_service_sleep();
 
   // 슬립 전 버튼 체크
   if (power_manager_handle_button()) {

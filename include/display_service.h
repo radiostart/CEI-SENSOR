@@ -48,17 +48,6 @@ void display_service_sleep(void);
  */
 void display_service_wakeup(void);
 
-/**
- * @brief 전체 갱신 필요 여부 확인 (주기적 갱신용)
- * @return true = 전체 갱신 필요
- */
-bool display_service_needs_full_refresh(void);
-
-/**
- * @brief 부분 갱신 카운터 리셋
- */
-void display_service_reset_refresh_counter(void);
-
 #ifdef __cplusplus
 }
 #endif

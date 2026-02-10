@@ -18,6 +18,11 @@ extern "C" {
 void battery_monitor_init(void);
 
 /**
+ * @brief Deinitialize the battery monitor (ADC 해제, 슬립 중 전력 절약)
+ */
+void battery_monitor_deinit(void);
+
+/**
  * @brief Read current battery voltage in mV
  * @return Voltage in millivolts
  */

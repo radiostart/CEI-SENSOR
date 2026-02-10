@@ -19,6 +19,8 @@ static const char *TAG = "SENSOR_SVC";
 // 마지막 측정값 (변화 감지용)
 static float s_last_temp = -999.0f;
 static float s_last_hum = -999.0f;
+// 센서 주소 스캔 캐시 (최초 1회만 스캔)
+static bool s_sensor_found = false;
 
 esp_err_t sensor_service_init(void) {
   ESP_LOGI(TAG, "Sensor service initialized");
@@ -50,12 +52,17 @@ esp_err_t sensor_service_read(sensor_data_t *data) {
     return ret;
   }
 
-  // 센서 스캔
-  ret = sht45_scan();
-  if (ret != ESP_OK) {
-    ESP_LOGW(TAG, "Sensor scan failed, retrying...");
-    vTaskDelay(pdMS_TO_TICKS(50));
-    sht45_scan();
+  // 센서 스캔 (최초 1회만, 이후 캐싱된 주소 사용)
+  if (!s_sensor_found) {
+    ret = sht45_scan();
+    if (ret != ESP_OK) {
+      ESP_LOGW(TAG, "Sensor scan failed, retrying...");
+      vTaskDelay(pdMS_TO_TICKS(50));
+      ret = sht45_scan();
+    }
+    if (ret == ESP_OK) {
+      s_sensor_found = true;
+    }
   }
 
   // 센서 읽기

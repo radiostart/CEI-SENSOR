@@ -144,8 +144,8 @@ pio device monitor --filter esp32_exception_decoder
 `src/ble_server.c`에서:
 ```c
 static esp_ble_adv_params_t adv_params = {
-    .adv_int_min = 0x20,  // 기본값: 20ms
-    .adv_int_max = 0x40,  // 기본값: 40ms
+    .adv_int_min = 0xA0,   // 기본값: 100ms
+    .adv_int_max = 0x140,  // 기본값: 200ms
     // 더 빠른 검색을 원하면:
     // .adv_int_min = 0x10,
     // .adv_int_max = 0x20,
@@ -165,14 +165,13 @@ static esp_ble_adv_params_t adv_params = {
 
 ```
 I (123) MAIN: ====================================
-I (123) MAIN:   ESP32-S3 + OLED [DEMO 모드]
+I (123) MAIN:   CEI-SENSOR Starting...
 I (123) MAIN: ====================================
-I (130) MAIN: NVS 초기화 중...
-I (135) MAIN: ✅ NVS 초기화 완료!
-I (140) MAIN: I2C 버스 초기화 중...
-I (145) MAIN: ✅ I2C 버스 초기화 완료!
-I (150) MAIN: ✅ OLED 디스플레이 초기화 완료!
-I (2155) MAIN: BLE 서버 초기화 중...
+I (130) MAIN: Initializing NVS...
+I (135) POWER_MGR: Power manager initialized
+I (140) SENSOR_SVC: Sensor service initialized
+I (145) DISPLAY_SVC: Display service initialized
+I (2155) MAIN: Initializing BLE...
 I (2160) BLE_SERVER: BLE 서버 초기화 중...
 I (2380) BLE_SERVER: ✅ BLE 서버 초기화 완료!
 I (2385) BLE_SERVER: 📱 앱에서 사용할 UUID:

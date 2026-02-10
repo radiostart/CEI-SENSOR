@@ -56,9 +56,11 @@ CONFIG_BT_GATTS_ENABLE=y                    # GATT 서버 활성화
 
 ```cmake
 idf_component_register(
-    SRCS "main.c" "sht45.c" "ssd1306.c" "ble_server.c" "cei_calculator.c"
+    SRCS "main.c" "sht45.c" "epd_driver.c" "epd_ui.c" "ble_server.c"
+         "sensor_service.c" "display_service.c" "power_manager.c"
+         "battery_monitor.c" "cess_calculator.c" "eml_calculator.c" ...
     INCLUDE_DIRS "../include"
-    REQUIRES bt driver nvs_flash
+    REQUIRES bt driver nvs_flash esp_timer
 )
 ```
 
@@ -175,20 +177,22 @@ sdkconfig.esp32-*
 ```
 CEI-SENSOR/
 ├── include/
+│   ├── app_config.h         # 전역 설정
 │   ├── sht45.h              # SHT-45 센서 드라이버
-│   ├── ssd1306.h            # OLED 디스플레이 드라이버
-│   ├── cei_calculator.h     # CEI 계산 라이브러리
+│   ├── epd_driver.h         # E-Paper 디스플레이 드라이버
+│   ├── epd_ui.h             # E-Paper UI 레이어
+│   ├── cess_calculator.h    # CESS 계산 라이브러리
 │   └── ble_server.h         # BLE 서버 (Bluedroid)
 ├── src/
-│   ├── main.c               # 메인 애플리케이션
+│   ├── main.c               # 메인 애플리케이션 (상태 머신)
 │   ├── sht45.c              # 센서 드라이버 구현
-│   ├── ssd1306.c            # 디스플레이 드라이버 구현
-│   ├── cei_calculator.c     # CEI 계산 구현
+│   ├── epd_driver.c         # E-Paper 드라이버 구현
+│   ├── epd_ui.c             # E-Paper UI 구현
 │   ├── ble_server.c         # BLE 서버 구현
 │   └── CMakeLists.txt       # 컴포넌트 빌드 설정
 ├── CMakeLists.txt           # 프로젝트 빌드 설정
 ├── platformio.ini           # PlatformIO 설정
-├── sdkconfig.defaults       # ESP-IDF 최소 설정 (23줄)
+├── sdkconfig.defaults       # ESP-IDF 최소 설정
 └── README.md                # 프로젝트 문서
 ```
 
