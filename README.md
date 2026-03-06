@@ -1,247 +1,173 @@
-# CEI-SENSOR 프로젝트
+# BakeTrack — Craft Environment Indicator (CEI-SENSOR)
 
-ESP32-S3를 사용한 온습도 센서 및 환경 예측 지수(CEI) 모니터링 시스템입니다.
+제과제빵 환경의 온도/습도를 실시간 모니터링하는 IoT 센서 기기 펌웨어.
+발효, 숙성, 건조 등 공정별 목표 환경을 추적하고 e-Paper 디스플레이에 표시합니다.
 
 ## 하드웨어 구성
 
-- **MCU**: ESP32-S3 Super Mini
-- **센서**: SHT-45 (온도/습도 센서)
-- **디스플레이**: 2.13" E-Paper (SSD1680, SPI)
-- **통신**: I2C (센서), SPI (디스플레이)
+- **MCU**: ESP32-C3-MINI-1 (RISC-V, BLE 5.0)
+- **센서**: SHT-45 (온도/습도, I2C)
+- **디스플레이**: 2.13" e-Paper (122x250px, SSD1680, SPI)
+- **전원**: Li-ion 배터리 + USB Type-C 충전 (BQ24075)
+- **PCB**: 커스텀 2-layer PCB (71.5x33mm)
+- **회로도**: [CEI-TOOL](../CEI-TOOL) (KiCad)
 
-## 기능
+## 주요 기능
 
-- ✅ SHT-45 센서를 통한 온습도 측정
-- ✅ 2.13" E-Paper에 실시간 데이터 표시
-- ✅ **Coffee Environment Index (CEI)** 계산 및 표시 (1~100 절대 지수)
-- ✅ 더미 센서 모드 (센서 없이 테스트 가능)
-- ✅ **Bluetooth LE 통신** (앱 연동 가능)
+- 10초 간격 온습도 측정 및 e-Paper 표시
+- BLE GATT Server — 모바일 앱([CEI-APP](../CEI-APP))과 실시간 통신
+- 공정 모니터링 (목표 온도/습도, 허용 편차, 진행률, 남은 시간)
+- SPIFFS 링 버퍼 데이터 로깅 (24시간, 8640 레코드)
+- 배터리 최적화 (light sleep, 적응형 슬립 주기, BLE TX 파워 조절)
+- 버튼 제어: 단일 클릭(즉시 갱신), 더블클릭(BLE 페어링), 3초 홀드(전원 OFF)
 
-## 연결 방법
+## 발효/제빵 공정 지원
 
-### SHT-45 센서
-| SHT-45 | ESP32-S3 |
-|--------|----------|
-| VDD    | 3.3V     |
-| SDA    | GPIO 8   |
-| SCL    | GPIO 9   |
-| GND    | GND      |
+앱에서 공정을 설정하면 기기가 실시간으로 환경을 추적합니다:
 
-### 2.13" E-Paper 디스플레이 (SPI)
-| E-Paper | ESP32-C3 |
-|---------|----------|
-| BUSY    | GPIO 10  |
-| RST     | GPIO 3   |
-| DC      | GPIO 4   |
-| CS      | GPIO 5   |
-| CLK     | GPIO 6   |
-| DIN     | GPIO 7   |
+| 공정 | 목표 온도 | 목표 습도 | 시간 |
+|------|-----------|-----------|------|
+| 1차 발효 (Bulk Fermentation) | 24~28°C | 70~80% | 60~120분 |
+| 2차 발효 (Proofing) | 27~35°C | 75~85% | 30~90분 |
+| 저온 발효 (Cold Retard) | 4~8°C | 70~80% | 8~24시간 |
+| 건조 (Drying) | 30~40°C | 30~50% | 수 시간 |
+| 초콜릿 템퍼링 (Tempering) | 27~32°C | 50~60% | 가변 |
 
-## 빌드 및 업로드
+기기는 현재 환경이 목표 범위를 벗어나면 e-Paper에서 해당 값을 반전 표시로 경고합니다.
 
-### PlatformIO 사용 (기본)
+## GPIO 핀 맵
+
+| GPIO | 기능 | 상세 |
+|------|------|------|
+| GPIO0 | I2C_SDA | SHT-45 센서 데이터 (4.7k 풀업) |
+| GPIO1 | I2C_SCL | SHT-45 센서 클럭 (4.7k 풀업) |
+| GPIO2 | BAT_ADC | 배터리 전압 측정 (47k+47k 분압) |
+| GPIO3 | MAIN_BTN | 메인 버튼 (RTC GPIO, 딥슬립 웨이크업) |
+| GPIO4 | SPI_RST | e-Paper 리셋 |
+| GPIO5 | SPI_CS | e-Paper 칩 셀렉트 |
+| GPIO6 | SPI_CLK | e-Paper SPI 클럭 |
+| GPIO7 | SPI_MOSI | e-Paper SPI 데이터 |
+| GPIO10 | USB_PGOOD | BQ24075 USB 전원 감지 (LOW=연결) |
+| GPIO20 | SPI_BUSY | e-Paper BUSY |
+| GPIO21 | SPI_DC | e-Paper 데이터/명령 선택 |
+
+## 빌드 및 플래시
+
+### 빌드
 
 ```bash
-# 빌드
 pio run
-
-# 업로드
-pio run --target upload
-
-# 시리얼 모니터
-pio run --target monitor
 ```
 
-### ESP-IDF 직접 사용 (Bluetooth 활성화 시 권장)
+### 플래시 (OpenOCD JTAG)
 
-**ESP-IDF 설치 (최초 1회만)**
+ESP32-C3 네이티브 USB-CDC에서는 esptool이 동작하지 않습니다.
+OpenOCD JTAG 방식을 사용합니다:
+
+1. **다운로드 모드 진입**: BOOT 버튼 누른 채 USB 연결 → 놓기
+2. **플래시**: `sudo bash flash.sh`
+
+또는 PlatformIO 업로드 (다운로드 모드 필요):
+```bash
+pio run -t upload
+```
+
+### 시리얼 모니터
 
 ```bash
-./install_espidf.sh
+pio device monitor
 ```
 
-**ESP-IDF 환경 활성화 및 빌드**
+## 설정
 
-```bash
-# ESP-IDF 환경 활성화 (매번 새 터미널에서 실행)
-source ~/esp/esp-idf/export.sh
-
-# 타겟 설정 (최초 1회만)
-idf.py set-target esp32s3
-
-# 빌드 및 업로드
-idf.py build
-idf.py flash
-
-# 시리얼 모니터
-idf.py monitor
-
-# 한 번에 실행
-idf.py build flash monitor
-```
-
-## 설정 옵션
-
-### src/main.c
-```c
-// 센서 테스트 모드 (센서 없이 테스트)
-#define USE_DUMMY_SENSOR    1    // 1=랜덤값, 0=실제 센서
-
-// BLE 기능 (기본 활성화)
-#define ENABLE_BLE          1    // 1=활성화, 0=비활성화
-```
-
-**⚠️ 중요**: Bluetooth가 정상 작동하려면 **NVS(Non-Volatile Storage) 초기화**가 필수입니다!
-현재 코드에 이미 포함되어 있습니다:
-```c
-// app_main()의 첫 부분
-esp_err_t nvs_ret = nvs_flash_init();
-```
-
-### CEI 계산 공식 수정
-
-**CEI (Coffee Environment Index)** 는 카페 실내 환경(온도, 습도)을 1~100점의 절대 지수로 산출합니다.
-
-#### 현재 적용된 공식
-
-```
-CEI = ((H - 10) / 80 × 70) + ((T - 10) / 25 × 30) + 1
-```
-
-**파라미터:**
-- **H** (습도): 유효범위 10~90% (건조주의보 ~ 장마철)
-- **T** (온도): 유효범위 10~35°C (겨울 오픈 전 ~ 여름 머신 열기)
-- **가중치**: 습도 70점, 온도 30점 (습도가 추출에 더 큰 영향)
-
-#### CEI 등급
-
-| CEI 값 | 등급 | 설명 |
-|--------|------|------|
-| 1~20   | Very Good | 최적 환경 (원두 보관/추출에 이상적) |
-| 21~40  | Good | 양호 (추출에 좋은 환경) |
-| 41~60  | Normal | 보통 (일반적인 실내 환경) |
-| 61~80  | Caution | 주의 (환경 관리 필요) |
-| 81~100 | Bad | 나쁨 (습도/온도 조절 필요) |
-
-#### 공식 커스터마이징
-
-`include/cei_calculator.h` 파일에서 파라미터를 수정할 수 있습니다:
+### app_config.h
 
 ```c
-// 습도 유효 범위
-#define CEI_HUMIDITY_MIN        10.0f
-#define CEI_HUMIDITY_MAX        90.0f
-
-// 온도 유효 범위
-#define CEI_TEMPERATURE_MIN     10.0f
-#define CEI_TEMPERATURE_MAX     35.0f
-
-// 가중치 (습도:온도 = 7:3)
-#define CEI_WEIGHT_HUMIDITY     70.0f
-#define CEI_WEIGHT_TEMPERATURE  30.0f
+#define APP_ENABLE_BLE 1        // BLE GATT Server (0=비활성화)
+#define APP_USE_DUMMY_SENSOR 0  // 더미 센서 모드 (1=테스트용)
 ```
 
-더 복잡한 공식이 필요하다면 `src/cei_calculator.c`의 `cei_calculate_custom()` 함수를 수정하세요.
+### 배터리 절전 설정
 
-## Bluetooth 기능
+| 항목 | 값 | 설명 |
+|------|-----|------|
+| 활성 슬립 | 10초 | 공정 진행 중 또는 BLE 연결 |
+| 유휴 슬립 | 30초 | 공정 미실행 + BLE 미연결 |
+| BLE TX (USB) | +9 dBm | 빠른 탐색 |
+| BLE TX (배터리) | +3 dBm | 절전 |
+| 로그 (USB) | INFO | 디버깅용 |
+| 로그 (배터리) | WARN | UART 절전 |
 
-Bluetooth Low Energy (BLE) 기능이 **기본적으로 활성화**되어 있습니다.
+## BLE GATT 프로토콜
 
-### 설정 확인
+**Service UUID**: `BA5E0001-0000-1000-8000-00805F9B34FB`
 
-현재 올바르게 설정되어 있습니다:
-
-✅ **sdkconfig.defaults**
-```
-CONFIG_BT_ENABLED=y
-CONFIG_BT_BLUEDROID_ENABLED=y
-CONFIG_BT_BLE_ENABLED=y
-CONFIG_BT_BLE_42_FEATURES_SUPPORTED=y  # 중요!
-```
-
-✅ **src/CMakeLists.txt**
-```cmake
-REQUIRES bt driver nvs_flash
-```
-
-✅ **src/main.c**
-```c
-#define ENABLE_BLE          1
-```
-
-### BLE 비활성화 (선택사항)
-
-BLE 기능이 필요 없다면:
-
-1. `src/main.c`에서 수정:
-   ```c
-   #define ENABLE_BLE          0
-   ```
-
-2. 재빌드:
-   ```bash
-   pio run
-   ```
-
-### BLE 연결 정보
-- **디바이스 이름**: CEI-Sensor
-- **서비스 UUID**: 4fafc201-1fb5-459e-8fcc-c5c9c331914b
-- **센서 데이터 Characteristic UUID**: beb5483e-36e1-4688-b7f5-ea07361b26ab
-- **데이터 형식**: JSON
-  ```json
-  {
-    "temperature": 25.5,
-    "humidity": 60.0,
-    "cei": 20.3
-  }
-  ```
+| Characteristic | UUID | 속성 | 용도 |
+|----------------|------|------|------|
+| REALTIME_DATA | BA5E0002 | Notify | 온습도 + 타임스탬프 (10초) |
+| UNSENT_DATA | BA5E0003 | Indicate+Write | 미전송 로그 동기화 |
+| PROCESS_CONFIG | BA5E0004 | Write | 공정 설정 수신 |
+| DEVICE_STATUS | BA5E0005 | Read | 펌웨어 버전, 저장소, 업타임 |
+| DEVICE_NAME | BA5E0006 | Read/Write | 기기 이름 |
+| ELAPSED_SYNC | BA5E0007 | Write NR | 앱 경과 시간 동기화 |
 
 ## 프로젝트 구조
 
 ```
 CEI-SENSOR/
 ├── include/
-│   ├── app_config.h       # 전역 설정 (핀, 타이밍, 기능 플래그)
-│   ├── sht45.h            # SHT-45 센서 드라이버
-│   ├── epd_driver.h       # E-Paper 디스플레이 드라이버 (SSD1680)
-│   ├── epd_ui.h           # E-Paper UI 레이어
-│   ├── display_service.h  # 디스플레이 서비스
-│   ├── sensor_service.h   # 센서 서비스
-│   ├── power_manager.h    # 전원/슬립 관리
-│   ├── battery_monitor.h  # 배터리 모니터
-│   ├── cess_calculator.h  # CESS 계산 라이브러리
-│   ├── eml_calculator.h   # EML 계산 라이브러리
-│   └── ble_server.h       # BLE 서버
+│   ├── app_config.h          # 전역 설정 (핀, 타이밍, 기능 플래그)
+│   ├── sht45.h               # SHT-45 센서 드라이버
+│   ├── epd_driver.h          # e-Paper 드라이버 (SSD1680)
+│   ├── epd_ui.h              # e-Paper UI 레이어
+│   ├── display_service.h     # 디스플레이 서비스
+│   ├── sensor_service.h      # 센서 서비스
+│   ├── sensor_glyphs_24px.h  # 센서 값 비트맵 폰트
+│   ├── power_manager.h       # 전원/슬립 관리
+│   ├── battery_monitor.h     # 배터리 모니터 (ADC)
+│   ├── ble_server.h          # BLE GATT Server
+│   ├── process_context.h     # 공정 컨텍스트 (NVS)
+│   └── spiffs_logger.h       # SPIFFS 링 버퍼 로거
 ├── src/
-│   ├── main.c             # 메인 애플리케이션 (상태 머신)
-│   ├── sht45.c            # SHT-45 센서 드라이버
-│   ├── epd_driver.c       # E-Paper 드라이버 구현
-│   ├── epd_ui.c           # E-Paper UI 구현
-│   ├── display_service.c  # 디스플레이 서비스
-│   ├── sensor_service.c   # 센서 서비스
-│   ├── power_manager.c    # 전원 관리
-│   ├── battery_monitor.c  # 배터리 모니터
-│   ├── cess_calculator.c  # CESS 계산
-│   ├── eml_calculator.c   # EML 계산
-│   ├── ble_server.c       # BLE 서버 구현
-│   └── CMakeLists.txt     # 빌드 설정
-├── CMakeLists.txt         # 프로젝트 설정
-├── platformio.ini         # PlatformIO 설정
-└── sdkconfig.defaults     # ESP-IDF 설정
+│   ├── main.c                # 메인 상태 머신
+│   ├── sht45.c               # SHT-45 드라이버
+│   ├── epd_driver.c          # e-Paper 드라이버
+│   ├── epd_ui.c              # e-Paper UI
+│   ├── display_service.c     # 디스플레이 서비스
+│   ├── sensor_service.c      # 센서 서비스 (히터 포함)
+│   ├── sensor_glyphs_24px.c  # 비트맵 글리프 데이터
+│   ├── power_manager.c       # 전원 관리
+│   ├── battery_monitor.c     # 배터리 ADC
+│   ├── ble_server.c          # BLE GATT 구현
+│   ├── process_context.c     # NVS 공정 컨텍스트
+│   ├── spiffs_logger.c       # SPIFFS 로거
+│   └── CMakeLists.txt        # 빌드 설정
+├── platformio.ini            # PlatformIO 설정
+├── sdkconfig.defaults        # ESP-IDF 설정
+├── partitions.csv            # 파티션 테이블 (1MB app + 960KB SPIFFS)
+├── openocd_upload.py         # OpenOCD 업로드 스크립트
+└── claude.md                 # Claude Code 프로젝트 문서
 ```
+
+## 연관 프로젝트
+
+- **[CEI-APP](../CEI-APP)** — Flutter 모바일 앱 (BLE GATT Client)
+- **[CEI-TOOL](../CEI-TOOL)** — KiCad 회로/PCB 설계
 
 ## 문제 해결
 
 ### 센서가 감지되지 않음
-1. I2C 연결 확인 (SDA, SCL, VCC, GND)
+1. I2C 케이블 연결 확인 (J4 커넥터: 3.3V, GND, SDA, SCL)
 2. 더미 센서 모드로 동작 확인: `app_config.h`에서 `APP_USE_DUMMY_SENSOR 1`
 
-### Bluetooth 컴파일 오류
-현재 설정이 올바르게 되어 있어 오류가 발생하지 않아야 합니다.
-만약 오류가 발생한다면:
-1. Clean 빌드 실행: `pio run -t clean && pio run`
-2. `sdkconfig.defaults`에 `CONFIG_BT_BLE_42_FEATURES_SUPPORTED=y` 확인
-3. 여전히 문제가 있다면 BLE 비활성화: `#define ENABLE_BLE 0`
+### 플래시가 안됨
+1. 다운로드 모드 진입 확인 (BOOT 버튼 + USB 연결)
+2. `sudo` 필요 (macOS libusb 권한)
+3. `flash.sh` 또는 `pio run -t upload` 사용
+
+### BLE 연결이 안됨
+1. 더블클릭으로 페어링 모드 진입 (30초간 Fast Advertising)
+2. 배터리 모드에서는 Slow Advertising (800-1600ms) — 탐색에 시간 소요
 
 ## 라이선스
 
