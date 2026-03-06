@@ -22,7 +22,8 @@ typedef enum {
   SENSOR_GLYPH_DEG18 = 11,
   SENSOR_GLYPH_C18 = 12,
   SENSOR_GLYPH_PCT18 = 13,
-  SENSOR_GLYPH_COUNT = 14
+  SENSOR_GLYPH_HYPHEN = 14,
+  SENSOR_GLYPH_COUNT = 15
 } sensor_glyph_id_t;
 
 const sensor_glyph_t *sensor_glyph_get(sensor_glyph_id_t id);

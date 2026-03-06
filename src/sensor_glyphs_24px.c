@@ -91,7 +91,14 @@ static const uint8_t sensor_glyph_pct18_data[] = {
     0x07, 0x67, 0x06, 0x36, 0x0C, 0x3E, 0x0C, 0x3C, 0x18, 0x1C,
 };
 
-// (Icon data removed - user provided replacement)
+// 하이픈 '-' 글리프: 10px wide × 24px tall, 중앙 가로선 (row 10~13)
+static const uint8_t sensor_glyph_hyphen_data[] = {
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0xFF, 0xC0, 0xFF, 0xC0, 0xFF, 0xC0, 0xFF, 0xC0,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+};
 
 static const sensor_glyph_t g_glyphs[] = {
     {.w = 12, .h = 24, .data = sensor_glyph_0_data},     // '0'
@@ -108,7 +115,7 @@ static const sensor_glyph_t g_glyphs[] = {
     {.w = 6, .h = 6, .data = sensor_glyph_deg18_data},   // '^'
     {.w = 10, .h = 15, .data = sensor_glyph_c18_data},   // 'C'
     {.w = 16, .h = 15, .data = sensor_glyph_pct18_data}, // '%'
-    {.w = 16, .h = 15, .data = sensor_glyph_pct18_data}, // '%'
+    {.w = 10, .h = 24, .data = sensor_glyph_hyphen_data}, // '-'
 };
 
 const sensor_glyph_t *sensor_glyph_get(sensor_glyph_id_t id) {
@@ -129,6 +136,8 @@ sensor_glyph_id_t sensor_glyph_lookup(char c) {
     return SENSOR_GLYPH_C18;
   case '%':
     return SENSOR_GLYPH_PCT18;
+  case '-':
+    return SENSOR_GLYPH_HYPHEN;
   default:
     return SENSOR_GLYPH_DOT;
   }

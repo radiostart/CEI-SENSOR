@@ -20,16 +20,14 @@ idf_component_register(
         "epd_icons.c"
 
         # Utility Layer
-        "cess_calculator.c"
-        "eml_calculator.c"
+        "process_context.c"
+        "spiffs_logger.c"
 
         # Resources (Fonts/Glyphs)
-        "noto_semicondensed_extrabold_digits_32x64.c"
-        "noto_semicondensed_extrabold_digits_32x64_metrics.c"
         "sensor_glyphs_24px.c"
 
     INCLUDE_DIRS
         "../include"
 
-    REQUIRES bt driver nvs_flash esp_timer
+    REQUIRES bt driver nvs_flash esp_timer spiffs
 )

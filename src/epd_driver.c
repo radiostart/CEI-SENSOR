@@ -531,7 +531,14 @@ void epd_sleep(void) {
 
 // Wakeup: SPI 재초기화 + Init + Buffer Sync for safety
 void epd_wakeup(void) {
-  epd_spi_init();
+  if (epd_spi_init() != ESP_OK) {
+    ESP_LOGW(TAG, "SPI re-init failed in wakeup, retrying...");
+    epd_spi_deinit();
+    if (epd_spi_init() != ESP_OK) {
+      ESP_LOGE(TAG, "SPI re-init failed after retry");
+      return;
+    }
+  }
   epd_init_sequence();
 
   // Sync Controller RAM with current s_fb_new to prevent state mismatch

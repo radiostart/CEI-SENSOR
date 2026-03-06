@@ -1,6 +1,6 @@
 /**
  * @file display_service.c
- * @brief 디스플레이 서비스 구현
+ * @brief 디스플레이 서비스 구현 - BakeTrack
  */
 
 #include "display_service.h"
@@ -18,31 +18,41 @@ esp_err_t display_service_init(void) {
     ESP_LOGE(TAG, "UI init failed: %d", ret);
     return ESP_FAIL;
   }
-
   ESP_LOGI(TAG, "Display service initialized");
   return ESP_OK;
 }
 
-void display_service_update(const sensor_data_t *data, int battery_pct) {
-  if (data == NULL || !data->valid) {
-    ESP_LOGW(TAG, "Invalid sensor data, skipping display update");
-    return;
+void display_service_update(const sensor_data_t *data, int battery_pct,
+                            const process_context_t *ctx, uint32_t elapsed_sec) {
+  ui_set_battery_level(battery_pct);
+  ui_update_process(ctx, elapsed_sec);
+
+  if (data != NULL && data->valid) {
+    int16_t temp_x10 = (int16_t)(data->temperature * 10);
+    int16_t hum_x10  = (int16_t)(data->humidity * 10);
+    ui_update_from_sensors(temp_x10, hum_x10, data->high_temp_warn);
+    ESP_LOGD(TAG, "Display: T=%d.%d H=%d.%d warn=%d",
+             temp_x10 / 10, temp_x10 % 10, hum_x10 / 10, hum_x10 % 10,
+             data->high_temp_warn);
+  } else {
+    ESP_LOGW(TAG, "No valid sensor data, showing '--'");
+    ui_set_sensor_invalid();
   }
 
-  // 배터리 레벨 설정
-  ui_set_battery_level(battery_pct);
-
-  // 센서 데이터를 UI 포맷으로 변환
-  int16_t temp_x10 = (int16_t)(data->temperature * 10);
-  int16_t hum_x10 = (int16_t)(data->humidity * 10);
-  int16_t cess_int = (int16_t)data->cess;
-
-  // UI 업데이트
-  ui_update_from_sensors(temp_x10, hum_x10, cess_int, 50);
   ui_render_partial();
+}
 
-  ESP_LOGD(TAG, "Display updated: T=%d.%d, H=%d.%d, CESS=%d",
-           temp_x10 / 10, temp_x10 % 10, hum_x10 / 10, hum_x10 % 10, cess_int);
+void display_service_set_ble_connected(bool connected) {
+  ui_set_ble_connected(connected);
+}
+
+void display_service_set_charging(bool charging) {
+  ui_set_charging(charging);
+}
+
+void display_service_show_low_battery(void) {
+  ESP_LOGI(TAG, "Showing low battery screen");
+  ui_show_low_battery();
 }
 
 void display_service_show_power_off(void) {
@@ -50,13 +60,14 @@ void display_service_show_power_off(void) {
   ui_show_power_off();
 }
 
+void display_service_show_ble_pairing(int remaining_sec) {
+  ui_show_ble_pairing(remaining_sec);
+}
+
 void display_service_full_refresh(void) {
-  ESP_LOGI(TAG, "Performing full refresh (ghosting removal)");
-  
-  // 전체 갱신 1회만 수행
+  ESP_LOGI(TAG, "Performing full refresh");
   epd_clear(EPD_COLOR_WHITE);
   epd_refresh();
-  
   ESP_LOGI(TAG, "Full refresh complete");
 }
 

@@ -50,14 +50,14 @@ extern "C" {
 #endif
 
 // ============================================================
-// GPIO (ESP32-C3)
+// GPIO (ESP32-C3) - Rev.2 PCB
 // ============================================================
-#define EPD_PIN_BUSY 10
-#define EPD_PIN_RST 3
-#define EPD_PIN_DC 4
-#define EPD_PIN_CS 5
-#define EPD_PIN_CLK 6
-#define EPD_PIN_DIN 7
+#define EPD_PIN_DC    21  // GPIO21 (SPI_DC)
+#define EPD_PIN_BUSY  20  // GPIO20 (SPI_BUSY)
+#define EPD_PIN_RST   4   // GPIO4  (SPI_RST)
+#define EPD_PIN_CS    5   // GPIO5  (SPI_CS)
+#define EPD_PIN_CLK   6   // GPIO6  (SPI_CLK)
+#define EPD_PIN_DIN   7   // GPIO7  (SPI_MOSI)
 
 // ============================================================
 // Color

@@ -23,7 +23,7 @@ esp_err_t sensor_service_init(void);
 /**
  * @brief 센서 데이터 읽기
  * 
- * I2C 초기화 -> 센서 읽기 -> CESS/EML 계산 -> I2C 해제
+ * I2C 초기화 -> 히터 루틴(6h 주기) -> 센서 읽기 -> I2C 해제
  * @param data 결과를 저장할 구조체
  * @return ESP_OK 성공
  */

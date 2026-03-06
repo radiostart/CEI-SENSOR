@@ -44,9 +44,17 @@ wakeup_cause_t power_manager_get_wakeup_cause(void);
 
 /**
  * @brief Light Sleep 진입
+ * @param duration_us 슬립 시간 (마이크로초), 0이면 APP_SLEEP_DURATION_US 사용
  * @return 웨이크업 후 원인
  */
-wakeup_cause_t power_manager_enter_sleep(void);
+wakeup_cause_t power_manager_enter_sleep_us(uint64_t duration_us);
+
+/**
+ * @brief Light Sleep 진입 (기본 10초)
+ */
+static inline wakeup_cause_t power_manager_enter_sleep(void) {
+  return power_manager_enter_sleep_us(APP_SLEEP_DURATION_US);
+}
 
 /**
  * @brief 전원 OFF 모드 진입 (버튼으로만 깨어남)
@@ -68,6 +76,11 @@ void power_manager_request_update(void);
  * @brief 강제 업데이트 플래그 확인 및 클리어
  */
 bool power_manager_consume_update_request(void);
+
+/**
+ * @brief BLE 페어링 모드 요청 확인 및 클리어 (더블클릭으로 활성화)
+ */
+bool power_manager_consume_pairing_request(void);
 
 #ifdef __cplusplus
 }

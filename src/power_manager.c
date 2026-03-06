@@ -4,8 +4,11 @@
  */
 
 #include "power_manager.h"
+#include "app_config.h"
+#include "battery_monitor.h"
 #include "button_handler.h"
 #include "display_service.h"
+#include "driver/gpio.h"
 #include "esp_log.h"
 #include "esp_sleep.h"
 #include "freertos/FreeRTOS.h"
@@ -19,9 +22,56 @@ static const char *TAG = "POWER_MGR";
 
 static app_state_t s_state = APP_STATE_INIT;
 static bool s_force_update = false;
+static bool s_pairing_requested = false;
+
+// 딥슬립 OFF 모드 플래그 (RTC 메모리: 딥슬립에서도 유지)
+static RTC_DATA_ATTR bool s_off_mode_deep_sleep = false;
+
+// 딥슬립 OFF 모드 진입 (GPIO3 버튼 웨이크업만)
+// 주의: GPIO10(USB_PGOOD)은 RTC GPIO가 아님 (ESP32-C3은 GPIO0-5만 RTC)
+//       딥슬립 웨이크업 마스크에 포함 불가 → 버튼으로만 기동
+static void enter_off_deep_sleep(void) {
+  s_off_mode_deep_sleep = true;
+  esp_deep_sleep_enable_gpio_wakeup(
+      (1ULL << APP_BUTTON_PIN),
+      ESP_GPIO_WAKEUP_GPIO_LOW);
+  esp_deep_sleep_start();
+  // 칩 리셋 — 이후 코드 실행 안됨
+}
 
 void power_manager_init(void) {
   button_handler_init();
+
+  // 딥슬립 OFF 모드에서 깨어난 경우 확인 (버튼 웨이크업만 가능)
+  if (s_off_mode_deep_sleep) {
+    s_off_mode_deep_sleep = false;
+
+    if (button_is_pressed()) {
+      // 버튼으로 깨어남 → 1초 홀드 확인 (전원 ON은 짧게)
+      ESP_LOGI(TAG, "OFF deep sleep → button, checking 1s hold...");
+      if (button_wait_hold(APP_BUTTON_POWERON_MS)) {
+        // 배터리 전압 확인
+        battery_usb_gpio_init();
+        battery_monitor_init();
+        uint32_t voltage = battery_read_voltage();
+        battery_monitor_deinit();
+
+        if (voltage > 0 && voltage < APP_BATTERY_RECOVERY_MV) {
+          ESP_LOGW(TAG, "Battery too low (%lumV) → back to deep sleep",
+                   (unsigned long)voltage);
+          enter_off_deep_sleep();
+        }
+        ESP_LOGI(TAG, "3s hold confirmed → power ON");
+      } else {
+        ESP_LOGI(TAG, "Short press → back to deep sleep");
+        enter_off_deep_sleep();
+      }
+    } else {
+      // 스퓨리어스 웨이크업 → 다시 딥슬립
+      ESP_LOGI(TAG, "OFF deep sleep → spurious → back to sleep");
+      enter_off_deep_sleep();
+    }
+  }
 
   // 초기 웨이크업 원인 확인
   wakeup_cause_t cause = power_manager_get_wakeup_cause();
@@ -59,11 +109,39 @@ wakeup_cause_t power_manager_get_wakeup_cause(void) {
   }
 }
 
-wakeup_cause_t power_manager_enter_sleep(void) {
-  ESP_LOGI(TAG, "Entering light sleep...");
+wakeup_cause_t power_manager_enter_sleep_us(uint64_t duration_us) {
+  if (duration_us == 0) duration_us = APP_SLEEP_DURATION_US;
+
+  // USB 연결 시 light sleep 대신 딜레이 (JTAG 플래시 안정성 보장)
+  if (battery_is_usb_connected()) {
+    ESP_LOGI(TAG, "USB connected - skipping light sleep (using delay)");
+    int loops = (int)(duration_us / 100000);
+    for (int i = 0; i < loops; i++) {
+      if (button_is_pressed()) {
+        return WAKEUP_CAUSE_BUTTON;
+      }
+      // USB 제거 시 즉시 반환 → 충전 표시 빠른 갱신
+      if (!battery_is_usb_connected()) {
+        ESP_LOGI(TAG, "USB disconnected during delay");
+        return WAKEUP_CAUSE_TIMER;
+      }
+#if APP_ENABLE_BLE
+      // 앱 구독 시작 → 즉시 사이클 시작 (센서 데이터 전송)
+      if (ble_server_consume_initial_sync()) {
+        ESP_LOGI(TAG, "BLE subscribed during sleep → immediate wakeup");
+        return WAKEUP_CAUSE_TIMER;
+      }
+#endif
+      vTaskDelay(pdMS_TO_TICKS(100));
+    }
+    return WAKEUP_CAUSE_TIMER;
+  }
+
+  ESP_LOGI(TAG, "Entering light sleep (%llu ms)...",
+           (unsigned long long)(duration_us / 1000));
 
   // 타이머 웨이크업 설정
-  esp_sleep_enable_timer_wakeup(APP_SLEEP_DURATION_US);
+  esp_sleep_enable_timer_wakeup(duration_us);
 
   // 슬립 진입
   esp_err_t ret = esp_light_sleep_start();
@@ -71,7 +149,9 @@ wakeup_cause_t power_manager_enter_sleep(void) {
   if (ret != ESP_OK) {
     ESP_LOGW(TAG, "Light sleep failed: %s", esp_err_to_name(ret));
     // 슬립 실패 시 딜레이로 대체
-    for (int i = 0; i < 100; i++) {
+    int fallback_loops = (int)(duration_us / 100000);
+    if (fallback_loops < 10) fallback_loops = 10;
+    for (int i = 0; i < fallback_loops; i++) {
       if (button_is_pressed()) {
         return WAKEUP_CAUSE_BUTTON;
       }
@@ -86,7 +166,8 @@ wakeup_cause_t power_manager_enter_sleep(void) {
 void power_manager_enter_off_mode(void) {
   ESP_LOGI(TAG, "Entering OFF mode...");
 
-  // 화면 업데이트
+  // 화면 업데이트 (슬립 상태일 수 있으므로 먼저 웨이크업)
+  display_service_wakeup();
   display_service_show_power_off();
   vTaskDelay(pdMS_TO_TICKS(2000));
   display_service_sleep();
@@ -95,30 +176,14 @@ void power_manager_enter_off_mode(void) {
   ble_server_pause();
 #endif
 
-  // OFF 루프 - 버튼 웨이크업만 허용
-  while (1) {
-    ESP_LOGI(TAG, "OFF mode. Waiting for button release...");
-    button_wait_release();
+  button_wait_release();
 
-    ESP_LOGI(TAG, "OFF mode. Press and hold to power ON...");
-    esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_TIMER);
-    esp_light_sleep_start();
-
-    // 웨이크업 후 버튼 홀드 확인
-    if (button_is_pressed()) {
-      ESP_LOGI(TAG, "Button pressed. Checking for 3s hold...");
-
-      if (button_wait_hold(APP_BUTTON_HOLD_TIME_MS)) {
-        ESP_LOGI(TAG, "3 seconds reached! Powering ON...");
-        esp_sleep_enable_timer_wakeup(APP_SLEEP_DURATION_US);
-        s_state = APP_STATE_ACTIVE;
-        s_force_update = true;
-        return;
-      }
-
-      ESP_LOGI(TAG, "Short press ignored in OFF mode.");
-    }
-  }
+  // USB 연결 여부와 무관하게 즉시 딥슬립 진입
+  // GPIO3(버튼) LOW 웨이크업만 (GPIO10은 RTC GPIO 아님)
+  // 깨어나면 칩 리셋 → app_main() 재시작 → power_manager_init()에서 처리
+  ESP_LOGI(TAG, "Entering deep sleep OFF mode...");
+  enter_off_deep_sleep();
+  // 칩 리셋 — 이후 코드 실행 안됨
 }
 
 bool power_manager_handle_button(void) {
@@ -141,9 +206,27 @@ bool power_manager_handle_button(void) {
     return true;
   }
 
-  // 짧은 누름 = 강제 업데이트
-  ESP_LOGI(TAG, "Short press detected -> Force update");
-  s_force_update = true;
+  // 짧은 누름 감지 — 더블클릭 대기 (400ms 윈도우)
+  bool double_click = false;
+  for (int i = 0; i < 20; i++) {  // 20 × 20ms = 400ms
+    vTaskDelay(pdMS_TO_TICKS(20));
+    if (button_is_pressed()) {
+      vTaskDelay(pdMS_TO_TICKS(20));  // 디바운스
+      if (button_is_pressed()) {
+        double_click = true;
+        button_wait_release();
+        break;
+      }
+    }
+  }
+
+  if (double_click) {
+    ESP_LOGI(TAG, "Double-click detected -> BLE pairing mode");
+    s_pairing_requested = true;
+  } else {
+    ESP_LOGI(TAG, "Short press detected -> Force update");
+    s_force_update = true;
+  }
   return true;
 }
 
@@ -154,5 +237,11 @@ void power_manager_request_update(void) {
 bool power_manager_consume_update_request(void) {
   bool result = s_force_update;
   s_force_update = false;
+  return result;
+}
+
+bool power_manager_consume_pairing_request(void) {
+  bool result = s_pairing_requested;
+  s_pairing_requested = false;
   return result;
 }
