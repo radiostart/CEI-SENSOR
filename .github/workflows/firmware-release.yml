@@ -1,0 +1,70 @@
+name: Firmware Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # needed for git describe in version_from_git.py
+
+      - uses: actions/cache@v4
+        with:
+          path: ~/.platformio
+          key: pio-${{ hashFiles('platformio.ini') }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install PlatformIO
+        run: pip install platformio
+
+      - name: Build firmware
+        run: pio run -e esp32-c3-mini
+
+      - name: Prepare release assets
+        id: prep
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          VERSION="${TAG#v}"
+          BIN_PATH=".pio/build/esp32-c3-mini/firmware.bin"
+          RELEASE_BIN="cei-sensor-${VERSION}.bin"
+
+          cp "$BIN_PATH" "$RELEASE_BIN"
+          SHA256=$(shasum -a 256 "$RELEASE_BIN" | awk '{print $1}')
+
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "file_name=$RELEASE_BIN" >> "$GITHUB_OUTPUT"
+          echo "sha256=$SHA256" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.prep.outputs.tag }}
+          name: CEI-SENSOR ${{ steps.prep.outputs.tag }}
+          generate_release_notes: true
+          files: ${{ steps.prep.outputs.file_name }}
+
+      - name: Register firmware version on API
+        run: |
+          curl -sf -X POST \
+            "${{ secrets.MELLOWAIR_API_URL }}/api/v1/firmware_versions" \
+            -H "Authorization: Bearer ${{ secrets.FIRMWARE_API_TOKEN }}" \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"firmware_version\": {
+                \"version\": \"${{ steps.prep.outputs.version }}\",
+                \"github_tag\": \"${{ steps.prep.outputs.tag }}\",
+                \"file_name\": \"${{ steps.prep.outputs.file_name }}\",
+                \"checksum_sha256\": \"${{ steps.prep.outputs.sha256 }}\",
+                \"stable\": true,
+                \"force_update\": false
+              }
+            }"
