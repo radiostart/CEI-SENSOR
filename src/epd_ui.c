@@ -444,6 +444,8 @@ void ui_show_ble_pairing(int remaining_sec) {
 // OTA 펌웨어 업데이트 화면
 // ============================================================
 #if APP_ENABLE_OTA
+static bool s_ota_first_render = true;
+
 void ui_show_ota_progress(uint8_t state, uint8_t progress_pct) {
   epd_clear(EPD_COLOR_WHITE);
   epd_draw_hline(0, 20, EPD_WIDTH, EPD_COLOR_BLACK);
@@ -483,7 +485,17 @@ void ui_show_ota_progress(uint8_t state, uint8_t progress_pct) {
   epd_draw_text_centered(cx, 190, "power off", EPD_FONT_SMALL, EPD_COLOR_BLACK);
 
   epd_draw_hline(0, EPD_HEIGHT - 20, EPD_WIDTH, EPD_COLOR_BLACK);
-  epd_refresh();
+
+  if (s_ota_first_render) {
+    epd_refresh();  // 첫 화면: 전체 갱신 (깨끗한 베이스)
+    s_ota_first_render = false;
+  } else {
+    epd_refresh_partial_area(0, 0, UI_WIDTH, UI_HEIGHT);  // 이후: 부분 갱신
+  }
+}
+
+void ui_reset_ota_render(void) {
+  s_ota_first_render = true;
 }
 #endif
 

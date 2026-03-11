@@ -149,8 +149,10 @@ void ui_show_power_off(void);
 void ui_show_ble_pairing(int remaining_sec);
 
 #if APP_ENABLE_OTA
-/** @brief OTA 펌웨어 업데이트 화면 표시 (프로그레스 바) */
+/** @brief OTA 펌웨어 업데이트 화면 표시 (부분 갱신, 첫 호출만 전체 갱신) */
 void ui_show_ota_progress(uint8_t state, uint8_t progress_pct);
+/** @brief OTA 렌더 상태 리셋 (다음 OTA 시 전체 갱신부터 시작) */
+void ui_reset_ota_render(void);
 #endif
 
 // 내부 헬퍼 (epd_ui.c 내부 공유)
