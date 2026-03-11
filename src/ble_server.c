@@ -1178,9 +1178,12 @@ int64_t ble_server_get_time_offset(void) {
 }
 
 #if APP_ENABLE_OTA
-bool ble_server_process_ota(void) {
+bool ble_server_process_ota(uint8_t *out_state, uint8_t *out_progress) {
     ble_ota_status_pkt_t pkt;
     if (!ble_ota_poll_status(&pkt)) return false;
+
+    if (out_state) *out_state = pkt.state;
+    if (out_progress) *out_progress = pkt.progress_pct;
 
     // OTA 상태 변경 시 Notify 전송
     if (s_is_connected && s_notify_ota_status && s_hdl_ota_status) {
@@ -1200,6 +1203,8 @@ bool ble_server_is_ota_active(void) {
     return ble_ota_is_active();
 }
 #else
-bool ble_server_process_ota(void) { return false; }
+bool ble_server_process_ota(uint8_t *out_state, uint8_t *out_progress) {
+    (void)out_state; (void)out_progress; return false;
+}
 bool ble_server_is_ota_active(void) { return false; }
 #endif

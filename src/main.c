@@ -16,6 +16,7 @@
 #include "driver/gpio.h"
 #include "ble_server.h"
 #include "display_service.h"
+#include "epd_ui.h"
 #include "power_manager.h"
 #include "process_context.h"
 #include "sensor_service.h"
@@ -474,7 +475,15 @@ static void handle_active_state(void) {
       ble_server_process_unsent();
       ble_server_process_deferred_mark();
       ble_server_process_clear_data();
-      ble_server_process_ota();
+#if APP_ENABLE_OTA
+      {
+        uint8_t ota_st, ota_pct;
+        if (ble_server_process_ota(&ota_st, &ota_pct)) {
+          display_service_wakeup();
+          ui_show_ota_progress(ota_st, ota_pct);
+        }
+      }
+#endif
       bool syncing = ble_server_is_syncing();
       bool ota_active = ble_server_is_ota_active();
       int delay = (syncing || ota_active) ? 20 : 100;
@@ -537,7 +546,15 @@ static void handle_active_state(void) {
         ble_server_process_reset_sent();
         ble_server_process_deferred_mark();
         ble_server_process_clear_data();
-        ble_server_process_ota();
+#if APP_ENABLE_OTA
+        {
+          uint8_t ota_st, ota_pct;
+          if (ble_server_process_ota(&ota_st, &ota_pct)) {
+            display_service_wakeup();
+            ui_show_ota_progress(ota_st, ota_pct);
+          }
+        }
+#endif
         bool syncing = ble_server_is_syncing();
         bool ota_active = ble_server_is_ota_active();
         int delay = (syncing || ota_active) ? 20 : 100;

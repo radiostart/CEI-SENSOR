@@ -148,6 +148,11 @@ void ui_show_power_off(void);
 /** @brief BLE 페어링 모드 화면 표시 (카운트다운) */
 void ui_show_ble_pairing(int remaining_sec);
 
+#if APP_ENABLE_OTA
+/** @brief OTA 펌웨어 업데이트 화면 표시 (프로그레스 바) */
+void ui_show_ota_progress(uint8_t state, uint8_t progress_pct);
+#endif
+
 // 내부 헬퍼 (epd_ui.c 내부 공유)
 void ui_draw_line(int x0, int y0, int x1, int y1, epd_color_t color);
 

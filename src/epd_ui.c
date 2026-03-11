@@ -441,6 +441,53 @@ void ui_show_ble_pairing(int remaining_sec) {
 }
 
 // ============================================================
+// OTA 펌웨어 업데이트 화면
+// ============================================================
+#if APP_ENABLE_OTA
+void ui_show_ota_progress(uint8_t state, uint8_t progress_pct) {
+  epd_clear(EPD_COLOR_WHITE);
+  epd_draw_hline(0, 20, EPD_WIDTH, EPD_COLOR_BLACK);
+
+  int cx = EPD_WIDTH / 2;
+
+  // 타이틀
+  epd_draw_text_centered(cx, 50, "FIRMWARE", EPD_FONT_LARGE, EPD_COLOR_BLACK);
+  epd_draw_text_centered(cx, 70, "UPDATE", EPD_FONT_LARGE, EPD_COLOR_BLACK);
+
+  // 상태 텍스트
+  const char *status_text = "Preparing...";
+  if (state == 1) status_text = "Ready";
+  else if (state == 2) status_text = "Receiving...";
+  else if (state == 3) status_text = "Verifying...";
+  else if (state == 4) status_text = "Rebooting...";
+  else if (state == 5) status_text = "Error!";
+  epd_draw_text_centered(cx, 100, status_text, EPD_FONT_SMALL, EPD_COLOR_BLACK);
+
+  // 퍼센트
+  char pct_str[8];
+  snprintf(pct_str, sizeof(pct_str), "%d%%", progress_pct > 100 ? 100 : progress_pct);
+  epd_draw_text_centered(cx, 118, pct_str, EPD_FONT_LARGE, EPD_COLOR_BLACK);
+
+  // 프로그레스 바
+  int bar_x = 8, bar_y = 140;
+  int bar_w = UI_WIDTH - 16, bar_h = 12;
+  epd_draw_rect(bar_x, bar_y, bar_w, bar_h, EPD_COLOR_BLACK);
+  int pct = progress_pct > 100 ? 100 : progress_pct;
+  int fill_w = (int)((bar_w - 2) * (pct / 100.0f));
+  if (fill_w > 0) {
+    epd_fill_rect(bar_x + 1, bar_y + 1, fill_w, bar_h - 2, EPD_COLOR_BLACK);
+  }
+
+  // 경고 텍스트
+  epd_draw_text_centered(cx, 175, "Do not", EPD_FONT_SMALL, EPD_COLOR_BLACK);
+  epd_draw_text_centered(cx, 190, "power off", EPD_FONT_SMALL, EPD_COLOR_BLACK);
+
+  epd_draw_hline(0, EPD_HEIGHT - 20, EPD_WIDTH, EPD_COLOR_BLACK);
+  epd_refresh();
+}
+#endif
+
+// ============================================================
 // 초기화
 // ============================================================
 int ui_init(void) {

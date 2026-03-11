@@ -198,9 +198,11 @@ int64_t ble_server_get_time_offset(void);
 
 /**
  * @brief OTA 상태 Notify 처리 (메인 루프에서 호출)
- * @return true = Notify 전송됨
+ * @param out_state       상태 출력 (NULL 가능)
+ * @param out_progress    진행률 출력 (NULL 가능)
+ * @return true = 상태 변경됨
  */
-bool ble_server_process_ota(void);
+bool ble_server_process_ota(uint8_t *out_state, uint8_t *out_progress);
 
 /** @brief OTA 진행 중 여부 (슬립 방지용) */
 bool ble_server_is_ota_active(void);
