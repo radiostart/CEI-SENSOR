@@ -67,8 +67,9 @@ jobs:
           echo "token=$TOKEN" >> "$GITHUB_OUTPUT"
 
       - name: Register firmware version on API
+        continue-on-error: true
         run: |
-          curl -sf -X POST \
+          HTTP_CODE=$(curl -s -o /tmp/api_response.txt -w "%{http_code}" -X POST \
             "${{ secrets.MELLOWAIR_API_URL }}/api/v1/firmware_versions" \
             -H "Authorization: Bearer ${{ steps.auth.outputs.token }}" \
             -H "Content-Type: application/json" \
@@ -81,4 +82,8 @@ jobs:
                 \"stable\": true,
                 \"force_update\": false
               }
-            }"
+            }")
+          echo "HTTP $HTTP_CODE"
+          cat /tmp/api_response.txt
+          echo ""
+          [ "$HTTP_CODE" -ge 200 ] && [ "$HTTP_CODE" -lt 300 ]
