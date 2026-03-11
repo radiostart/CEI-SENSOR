@@ -368,7 +368,10 @@ esp_err_t spiffs_logger_mark_sent_batch(const uint32_t *log_indices, uint32_t co
     long offset = (long)(log_indices[i] * sizeof(log_record_t)) +
                   (long)offsetof(log_record_t, sent);
     fseek(f, offset, SEEK_SET);
-    fwrite(&sent_val, 1, 1, f);
+    if (fwrite(&sent_val, 1, 1, f) != 1) {
+      ESP_LOGW(TAG, "mark_sent_batch: fwrite failed at idx %u", (unsigned)log_indices[i]);
+      continue;
+    }
     marked++;
   }
   log_file_flush();

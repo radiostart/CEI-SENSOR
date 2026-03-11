@@ -133,8 +133,11 @@ esp_err_t sht4x_run_heater_high_power(void) {
   i2c_master_write_byte(cmd_handle, (s_sht4x_addr << 1) | I2C_MASTER_READ, true);
   i2c_master_read(cmd_handle, rx_data, 6, I2C_MASTER_LAST_NACK);
   i2c_master_stop(cmd_handle);
-  i2c_master_cmd_begin(g_i2c_port, cmd_handle, pdMS_TO_TICKS(200));
+  ret = i2c_master_cmd_begin(g_i2c_port, cmd_handle, pdMS_TO_TICKS(200));
   i2c_cmd_link_delete(cmd_handle);
+  if (ret != ESP_OK) {
+    ESP_LOGW(TAG, "Heater readback failed (non-critical): %s", esp_err_to_name(ret));
+  }
 
   ESP_LOGI(TAG, "Heater done (200mW/100ms)");
   return ESP_OK;

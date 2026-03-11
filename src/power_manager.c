@@ -28,6 +28,21 @@ static bool s_pairing_requested = false;
 // 딥슬립 OFF 모드 플래그 (RTC 메모리: 딥슬립에서도 유지)
 static RTC_DATA_ATTR bool s_off_mode_deep_sleep = false;
 
+// 더블클릭 감지 (400ms 윈도우)
+static bool wait_for_double_click(void) {
+  for (int i = 0; i < 20; i++) { // 20 × 20ms = 400ms
+    vTaskDelay(pdMS_TO_TICKS(20));
+    if (button_is_pressed()) {
+      vTaskDelay(pdMS_TO_TICKS(20)); // 디바운스
+      if (button_is_pressed()) {
+        button_wait_release();
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 // 딥슬립 OFF 모드 진입 (GPIO3 버튼 웨이크업만)
 // 주의: GPIO10(USB_PGOOD)은 RTC GPIO가 아님 (ESP32-C3은 GPIO0-5만 RTC)
 //       딥슬립 웨이크업 마스크에 포함 불가 → 버튼으로만 기동
@@ -211,20 +226,7 @@ bool power_manager_handle_button(void) {
   }
 
   // 짧은 누름 감지 — 더블클릭 대기 (400ms 윈도우)
-  bool double_click = false;
-  for (int i = 0; i < 20; i++) {  // 20 × 20ms = 400ms
-    vTaskDelay(pdMS_TO_TICKS(20));
-    if (button_is_pressed()) {
-      vTaskDelay(pdMS_TO_TICKS(20));  // 디바운스
-      if (button_is_pressed()) {
-        double_click = true;
-        button_wait_release();
-        break;
-      }
-    }
-  }
-
-  if (double_click) {
+  if (wait_for_double_click()) {
     ESP_LOGI(TAG, "Double-click detected -> BLE pairing mode");
     s_pairing_requested = true;
   } else {
@@ -247,20 +249,7 @@ void power_manager_handle_button_event(void) {
 
   // 이미 놓여있음 → 짧은 누름으로 간주, 더블클릭 대기
   ESP_LOGI(TAG, "Button wakeup (released). Waiting for double-click...");
-  bool double_click = false;
-  for (int i = 0; i < 20; i++) {  // 20 × 20ms = 400ms
-    vTaskDelay(pdMS_TO_TICKS(20));
-    if (button_is_pressed()) {
-      vTaskDelay(pdMS_TO_TICKS(20));  // 디바운스
-      if (button_is_pressed()) {
-        double_click = true;
-        button_wait_release();
-        break;
-      }
-    }
-  }
-
-  if (double_click) {
+  if (wait_for_double_click()) {
     ESP_LOGI(TAG, "Double-click detected -> BLE pairing mode");
     s_pairing_requested = true;
   } else {

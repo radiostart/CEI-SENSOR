@@ -75,9 +75,9 @@ esp_err_t sensor_service_read(sensor_data_t *data) {
 
   if (run_heater && s_sensor_found) {
     ESP_LOGI(TAG, "Running heater (anti-condensation)...");
+    s_last_heater_us = esp_timer_get_time();  // 성공/실패 무관하게 갱신 (실패 시 무한 재시도 방지)
     ret = sht4x_run_heater_high_power();
     if (ret == ESP_OK) {
-      s_last_heater_us = esp_timer_get_time();
       // I2C 해제 후 2초 안정화 대기
       i2c_manager_deinit();
       vTaskDelay(pdMS_TO_TICKS(2000));

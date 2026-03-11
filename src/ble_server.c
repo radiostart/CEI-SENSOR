@@ -35,63 +35,27 @@ static const char *TAG = "BLE_SERVER";
 static void set_adv_data(void);
 
 // ============================================================
-// UUID 정의 (Little-Endian)
+// UUID 정의 (Little-Endian): BA5E00xx-0000-1000-8000-00805F9B34FB
 // ============================================================
-// Service: BA5E0001-0000-1000-8000-00805F9B34FB
-static const uint8_t svc_uuid[16] = {
-    0xFB, 0x34, 0x9B, 0x5F, 0x80, 0x00, 0x00, 0x80,
-    0x00, 0x10, 0x00, 0x00, 0x01, 0x00, 0x5E, 0xBA};
+#define BA5E_UUID128(id)                                                       \
+  {                                                                            \
+    0xFB, 0x34, 0x9B, 0x5F, 0x80, 0x00, 0x00, 0x80, 0x00, 0x10, 0x00, 0x00,  \
+        (id), 0x00, 0x5E, 0xBA                                                \
+  }
 
-// REALTIME_DATA: BA5E0002-...
-static const uint8_t uuid_realtime[16] = {
-    0xFB, 0x34, 0x9B, 0x5F, 0x80, 0x00, 0x00, 0x80,
-    0x00, 0x10, 0x00, 0x00, 0x02, 0x00, 0x5E, 0xBA};
-
-// UNSENT_DATA: BA5E0003-...
-static const uint8_t uuid_unsent[16] = {
-    0xFB, 0x34, 0x9B, 0x5F, 0x80, 0x00, 0x00, 0x80,
-    0x00, 0x10, 0x00, 0x00, 0x03, 0x00, 0x5E, 0xBA};
-
-// PROCESS_CONFIG: BA5E0004-...
-static const uint8_t uuid_proc_cfg[16] = {
-    0xFB, 0x34, 0x9B, 0x5F, 0x80, 0x00, 0x00, 0x80,
-    0x00, 0x10, 0x00, 0x00, 0x04, 0x00, 0x5E, 0xBA};
-
-// DEVICE_STATUS: BA5E0005-...
-static const uint8_t uuid_dev_status[16] = {
-    0xFB, 0x34, 0x9B, 0x5F, 0x80, 0x00, 0x00, 0x80,
-    0x00, 0x10, 0x00, 0x00, 0x05, 0x00, 0x5E, 0xBA};
-
-// DEVICE_NAME: BA5E0006-...
-static const uint8_t uuid_dev_name[16] = {
-    0xFB, 0x34, 0x9B, 0x5F, 0x80, 0x00, 0x00, 0x80,
-    0x00, 0x10, 0x00, 0x00, 0x06, 0x00, 0x5E, 0xBA};
-
-// ELAPSED_SYNC: BA5E0007-...
-static const uint8_t uuid_elapsed_sync[16] = {
-    0xFB, 0x34, 0x9B, 0x5F, 0x80, 0x00, 0x00, 0x80,
-    0x00, 0x10, 0x00, 0x00, 0x07, 0x00, 0x5E, 0xBA};
-
-// TIME_SYNC: BA5E0008-...
-static const uint8_t uuid_time_sync[16] = {
-    0xFB, 0x34, 0x9B, 0x5F, 0x80, 0x00, 0x00, 0x80,
-    0x00, 0x10, 0x00, 0x00, 0x08, 0x00, 0x5E, 0xBA};
+static const uint8_t svc_uuid[16] = BA5E_UUID128(0x01);
+static const uint8_t uuid_realtime[16] = BA5E_UUID128(0x02);
+static const uint8_t uuid_unsent[16] = BA5E_UUID128(0x03);
+static const uint8_t uuid_proc_cfg[16] = BA5E_UUID128(0x04);
+static const uint8_t uuid_dev_status[16] = BA5E_UUID128(0x05);
+static const uint8_t uuid_dev_name[16] = BA5E_UUID128(0x06);
+static const uint8_t uuid_elapsed_sync[16] = BA5E_UUID128(0x07);
+static const uint8_t uuid_time_sync[16] = BA5E_UUID128(0x08);
 
 #if APP_ENABLE_OTA
-// OTA_CONTROL: BA5E0009-...
-static const uint8_t uuid_ota_control[16] = {
-    0xFB, 0x34, 0x9B, 0x5F, 0x80, 0x00, 0x00, 0x80,
-    0x00, 0x10, 0x00, 0x00, 0x09, 0x00, 0x5E, 0xBA};
-
-// OTA_DATA: BA5E000A-...
-static const uint8_t uuid_ota_data[16] = {
-    0xFB, 0x34, 0x9B, 0x5F, 0x80, 0x00, 0x00, 0x80,
-    0x00, 0x10, 0x00, 0x00, 0x0A, 0x00, 0x5E, 0xBA};
-
-// OTA_STATUS: BA5E000B-...
-static const uint8_t uuid_ota_status[16] = {
-    0xFB, 0x34, 0x9B, 0x5F, 0x80, 0x00, 0x00, 0x80,
-    0x00, 0x10, 0x00, 0x00, 0x0B, 0x00, 0x5E, 0xBA};
+static const uint8_t uuid_ota_control[16] = BA5E_UUID128(0x09);
+static const uint8_t uuid_ota_data[16] = BA5E_UUID128(0x0A);
+static const uint8_t uuid_ota_status[16] = BA5E_UUID128(0x0B);
 #endif
 
 // ============================================================
@@ -372,6 +336,20 @@ static void set_conn_params_slow(void) {
 }
 
 // ============================================================
+// UNSENT 동기화 초기화 헬퍼
+// ============================================================
+static void start_unsent_sync(void) {
+    set_conn_params_fast();
+    s_unsent_seq = 0;
+    s_batch_count = 0;
+    s_unsent_ring_offset = 0;
+    s_mark_from_offset = 0;
+    s_unsent_sync_active = true;
+    s_unsent_start_pending = true;
+    s_unsent_needs_processing = true;
+}
+
+// ============================================================
 // UNSENT 데이터 동기화: 배치 전송 (Notify)
 // ============================================================
 static void unsent_send_batch(void) {
@@ -628,15 +606,7 @@ static void gatts_event_handler(esp_gatts_cb_event_t event,
                 ESP_LOGI(TAG, "UNSENT subscribe %s (cccd=0x%04x)",
                          s_indicate_unsent ? "ON" : "OFF", cccd);
                 if (s_indicate_unsent && !s_unsent_sync_active) {
-                    // 구독 시점에 즉시 FAST 전환 요청 (협상 시간 확보)
-                    set_conn_params_fast();
-                    s_unsent_seq = 0;
-                    s_batch_count = 0;
-                    s_unsent_ring_offset = 0;
-                    s_mark_from_offset = 0;  // 마킹 시작 위치 저장
-                    s_unsent_sync_active = true;
-                    s_unsent_start_pending = true;
-                    s_unsent_needs_processing = true;
+                    start_unsent_sync();
                     ESP_LOGI(TAG, "UNSENT sync requested (deferred to main loop)");
                 }
             }
@@ -657,14 +627,7 @@ static void gatts_event_handler(esp_gatts_cb_event_t event,
             // UNSENT_DATA Write (재동기화 명령: 0x53 = 'S')
             else if (handle == s_hdl_unsent && len >= 1 && val[0] == 0x53) {
                 if (s_indicate_unsent && !s_unsent_sync_active) {
-                    set_conn_params_fast();
-                    s_unsent_seq = 0;
-                    s_batch_count = 0;
-                    s_unsent_ring_offset = 0;
-                    s_mark_from_offset = 0;
-                    s_unsent_sync_active = true;
-                    s_unsent_start_pending = true;
-                    s_unsent_needs_processing = true;
+                    start_unsent_sync();
                     ESP_LOGI(TAG, "UNSENT resync requested (0x53)");
                 }
             }
@@ -1097,11 +1060,15 @@ bool ble_server_process_reset_sent(void) {
     if (!s_reset_sent_pending) return false;
     s_reset_sent_pending = false;
     ESP_LOGW(TAG, "Executing sent flags reset...");
-    spiffs_logger_reset_sent_flags();
-    ESP_LOGW(TAG, "Sent flags reset complete");
+    esp_err_t rc = spiffs_logger_reset_sent_flags();
+    if (rc != ESP_OK) {
+        ESP_LOGE(TAG, "Sent flags reset failed: %s", esp_err_to_name(rc));
+    } else {
+        ESP_LOGW(TAG, "Sent flags reset complete");
+    }
 
     // 리셋 완료 알림: UNSENT_DATA에 0x52 응답 (앱이 재구독 타이밍 판단)
-    if (s_is_connected && s_hdl_unsent != 0) {
+    if (s_is_connected && s_indicate_unsent && s_hdl_unsent != 0) {
         uint8_t ack = 0x52;
         esp_ble_gatts_send_indicate(s_gatts_if, s_conn_id, s_hdl_unsent,
                                     1, &ack, false);
@@ -1114,10 +1081,14 @@ bool ble_server_process_clear_data(void) {
     if (!s_clear_data_pending) return false;
     s_clear_data_pending = false;
     ESP_LOGW(TAG, "Executing data clear...");
-    spiffs_logger_clear_all();
-    ESP_LOGW(TAG, "Data clear complete");
+    esp_err_t rc2 = spiffs_logger_clear_all();
+    if (rc2 != ESP_OK) {
+        ESP_LOGE(TAG, "Data clear failed: %s", esp_err_to_name(rc2));
+    } else {
+        ESP_LOGW(TAG, "Data clear complete");
+    }
 
-    if (s_is_connected && s_hdl_unsent != 0) {
+    if (s_is_connected && s_indicate_unsent && s_hdl_unsent != 0) {
         uint8_t ack = 0x44;
         esp_ble_gatts_send_indicate(s_gatts_if, s_conn_id, s_hdl_unsent,
                                     1, &ack, false);

@@ -277,6 +277,13 @@ static void handle_active_state(void) {
       }
       if (!ble_server_is_ota_active()) {
         s_ota_last_disp_pct = 0xFF;
+        // ERROR 화면을 3초간 표시 후 측정 화면으로 복귀
+        if (ota_st == 5) {  // OTA_STATE_ERROR
+          display_service_wakeup();
+          ui_show_ota_progress(ota_st, ota_pct);
+          vTaskDelay(pdMS_TO_TICKS(3000));
+        }
+        ui_reset_ota_render();
         break;
       }
       vTaskDelay(pdMS_TO_TICKS(20));
@@ -364,9 +371,11 @@ static void handle_active_state(void) {
   // 경과 시간 NVS 주기 갱신 (매 30사이클 ≈ 300초, 플래시 쓰기 절감)
   {
     static uint8_t elapsed_save_cnt = 0;
-    if (++elapsed_save_cnt >= 30 && s_proc_ctx.is_active) {
-      process_context_save_elapsed(get_elapsed_sec());
+    if (++elapsed_save_cnt >= 30) {
       elapsed_save_cnt = 0;
+      if (s_proc_ctx.is_active) {
+        process_context_save_elapsed(get_elapsed_sec());
+      }
     }
   }
 
@@ -480,7 +489,6 @@ static void handle_active_state(void) {
         display_service_full_refresh();
         vTaskDelay(pdMS_TO_TICKS(300));
       }
-      if (!is_done) s_done_notified = false;
     }
 
     display_service_update(&data, battery_pct, &s_proc_ctx, elapsed);

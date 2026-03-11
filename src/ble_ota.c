@@ -229,6 +229,8 @@ void ble_ota_reset(void) {
         esp_ota_abort(s_ota_handle);
         ESP_LOGW(TAG, "OTA aborted due to reset (disconnect)");
     }
+    s_ota_handle = 0;
+    s_update_partition = NULL;
     s_state = OTA_STATE_IDLE;
     s_error = OTA_ERR_NONE;
     s_status_changed = false;
