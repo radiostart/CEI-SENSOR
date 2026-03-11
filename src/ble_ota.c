@@ -12,6 +12,7 @@
 #include "esp_ota_ops.h"
 #include "esp_partition.h"
 #include "esp_system.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include <string.h>
@@ -32,10 +33,15 @@ static uint32_t s_total_size = 0;
 static uint32_t s_received_size = 0;
 static uint8_t s_last_progress = 0;
 
+// 타임아웃 (15초간 데이터 미수신 시 자동 취소)
+#define OTA_TIMEOUT_US  (15 * 1000000LL)
+static int64_t s_last_activity_us = 0;
+
 static void set_state(ota_state_t state, ota_error_t error) {
     s_state = state;
     s_error = error;
     s_status_changed = true;
+    s_last_activity_us = esp_timer_get_time();
 }
 
 void ble_ota_handle_control(const uint8_t *data, uint16_t len) {
@@ -72,6 +78,12 @@ void ble_ota_handle_control(const uint8_t *data, uint16_t len) {
         }
 
         s_update_partition = esp_ota_get_next_update_partition(NULL);
+        if (s_update_partition && total_size > s_update_partition->size) {
+            ESP_LOGE(TAG, "Firmware too large: %u > partition %u",
+                     (unsigned)total_size, (unsigned)s_update_partition->size);
+            set_state(OTA_STATE_ERROR, OTA_ERR_NO_PARTITION);
+            return;
+        }
         if (!s_update_partition) {
             ESP_LOGE(TAG, "No OTA partition found");
             set_state(OTA_STATE_ERROR, OTA_ERR_NO_PARTITION);
@@ -155,6 +167,7 @@ void ble_ota_handle_data(const uint8_t *data, uint16_t len) {
     }
 
     s_received_size += len;
+    s_last_activity_us = esp_timer_get_time();
     if (s_state != OTA_STATE_RECEIVING) {
         s_state = OTA_STATE_RECEIVING;
     }
@@ -173,6 +186,16 @@ void ble_ota_handle_data(const uint8_t *data, uint16_t len) {
 }
 
 bool ble_ota_poll_status(ble_ota_status_pkt_t *status_out) {
+    // 타임아웃 체크: 15초간 데이터 미수신 시 자동 취소
+    if (ble_ota_is_active() && s_last_activity_us > 0) {
+        int64_t elapsed = esp_timer_get_time() - s_last_activity_us;
+        if (elapsed > OTA_TIMEOUT_US) {
+            ESP_LOGW(TAG, "OTA timeout (%lld sec), aborting", elapsed / 1000000LL);
+            esp_ota_abort(s_ota_handle);
+            set_state(OTA_STATE_ERROR, OTA_ERR_ABORTED);
+        }
+    }
+
     if (!s_status_changed) return false;
     s_status_changed = false;
 
@@ -212,4 +235,5 @@ void ble_ota_reset(void) {
     s_total_size = 0;
     s_received_size = 0;
     s_last_progress = 0;
+    s_last_activity_us = 0;
 }

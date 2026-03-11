@@ -258,6 +258,34 @@ static void handle_ble_pairing_mode(void) {
 static void handle_active_state(void) {
   sensor_data_t data;
 
+  // OTA 진행 중이면 센서/디스플레이 처리 건너뛰고 OTA 폴링만 수행
+#if APP_ENABLE_OTA
+  if (ble_server_is_ota_active()) {
+    static uint8_t s_ota_last_disp_pct = 0xFF;
+    for (int t = 0; t < 10000; ) {
+      if (power_manager_handle_button()) { /* 버튼 무시, 이벤트만 소비 */ }
+      uint8_t ota_st, ota_pct;
+      if (ble_server_process_ota(&ota_st, &ota_pct)) {
+        // 상태 변경 또는 5% 단위로만 디스플레이 갱신
+        bool disp_update = (ota_st != 2)  // 상태 변경 (READY/VERIFY/SUCCESS/ERROR)
+            || (ota_pct / 5 != s_ota_last_disp_pct / 5);  // 5% 단위
+        if (disp_update) {
+          display_service_wakeup();
+          ui_show_ota_progress(ota_st, ota_pct);
+          s_ota_last_disp_pct = ota_pct;
+        }
+      }
+      if (!ble_server_is_ota_active()) {
+        s_ota_last_disp_pct = 0xFF;
+        break;
+      }
+      vTaskDelay(pdMS_TO_TICKS(20));
+      t += 20;
+    }
+    return;
+  }
+#endif
+
   // BLE 페어링 모드 확인 (더블클릭)
 #if APP_ENABLE_BLE
   if (power_manager_consume_pairing_request()) {
