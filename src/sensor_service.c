@@ -1,15 +1,15 @@
 /**
  * @file sensor_service.c
- * @brief 센서 데이터 수집 서비스 구현 (BakeTrack)
+ * @brief 센서 데이터 수집 서비스 구현 (Mellow Air)
  *
- * - SHT45 온습도 읽기
+ * - SHT4x 온습도 읽기
  * - 6시간 주기 히터 루틴 (결로 방지)
  * - 80°C 이상 고온 경고 플래그 설정
  */
 
 #include "sensor_service.h"
 #include "i2c_manager.h"
-#include "sht45.h"
+#include "sht4x.h"
 #include "esp_log.h"
 #include "esp_random.h"
 #include "esp_timer.h"
@@ -24,7 +24,7 @@ static float s_last_temp = -999.0f;
 static float s_last_hum  = -999.0f;
 // 최초 업데이트 플래그
 static bool s_first_update_done = false;
-// 센서 주소 스캔 캐시
+// 센서 연결 상태
 static bool s_sensor_found = false;
 // 히터 마지막 실행 시각 (us)
 static int64_t s_last_heater_us = 0;
@@ -57,14 +57,15 @@ esp_err_t sensor_service_read(sensor_data_t *data) {
     return ret;
   }
 
-  // 센서 스캔 (최초 1회)
+  // 센서 미감지 시 매 사이클 스캔
   if (!s_sensor_found) {
-    ret = sht45_scan();
+    ret = sht4x_scan();
     if (ret != ESP_OK) {
-      vTaskDelay(pdMS_TO_TICKS(50));
-      ret = sht45_scan();
+      i2c_manager_deinit();
+      return ESP_ERR_NOT_FOUND;
     }
-    if (ret == ESP_OK) s_sensor_found = true;
+    s_sensor_found = true;
+    ESP_LOGI(TAG, "Sensor connected");
   }
 
   // 6시간 주기 히터 루틴 (결로 방지)
@@ -74,7 +75,7 @@ esp_err_t sensor_service_read(sensor_data_t *data) {
 
   if (run_heater && s_sensor_found) {
     ESP_LOGI(TAG, "Running heater (anti-condensation)...");
-    ret = sht45_run_heater_high_power();
+    ret = sht4x_run_heater_high_power();
     if (ret == ESP_OK) {
       s_last_heater_us = esp_timer_get_time();
       // I2C 해제 후 2초 안정화 대기
@@ -90,14 +91,16 @@ esp_err_t sensor_service_read(sensor_data_t *data) {
   }
 
   // 센서 읽기
-  sht45_data_t sht_data;
-  ret = sht45_read_temperature_humidity(&sht_data);
+  sht4x_data_t sht_data;
+  ret = sht4x_read_temperature_humidity(&sht_data);
 
   // I2C 해제 (저전력)
   i2c_manager_deinit();
 
   if (ret != ESP_OK) {
-    ESP_LOGE(TAG, "Sensor read failed: %s", esp_err_to_name(ret));
+    // 읽기 실패 → 센서 분리로 판단, 다음 사이클에서 재스캔
+    s_sensor_found = false;
+    ESP_LOGW(TAG, "Sensor read failed, marking disconnected");
     return ret;
   }
 
@@ -145,4 +148,8 @@ void sensor_service_update_last(const sensor_data_t *data) {
     s_last_temp = data->temperature;
     s_last_hum  = data->humidity;
   }
+}
+
+void sensor_service_force_rescan(void) {
+  s_sensor_found = false;
 }

@@ -1,6 +1,6 @@
 /**
  * @file epd_ui.c
- * @brief E-Paper UI 구현 - BakeTrack 발효 모니터링 인터페이스
+ * @brief E-Paper UI 구현 - Mellow Air 발효 모니터링 인터페이스
  *
  * 2.13인치 BW E-Paper 세로형 UI (122 x 250 픽셀)
  *
@@ -451,7 +451,7 @@ int ui_init(void) {
   s_ui_state.is_ble_connected = false;
   s_ui_state.process_active  = false;
   s_ui_initialized = true;
-  ESP_LOGI(TAG, "UI initialized (BakeTrack)");
+  ESP_LOGI(TAG, "UI initialized (Mellow Air)");
   return 0;
 }
 

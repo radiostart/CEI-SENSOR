@@ -1,6 +1,8 @@
-# BakeTrack Custom Partition Table (2MB Flash)
-# Name,    Type,  SubType,  Offset,   Size,    Flags
-nvs,       data,  nvs,      0x9000,   0x5000,
-phy_init,  data,  phy,      0xe000,   0x1000,
-factory,   app,   factory,  0x10000,  0x100000,
-spiffs,    data,  spiffs,   0x110000, 0xF0000,
+# Mellow Air Custom Partition Table (4MB Flash, OTA)
+# Name,    Type,  SubType,  Offset,    Size,     Flags
+nvs,       data,  nvs,      0x9000,    0x5000,
+otadata,   data,  ota,      0xE000,    0x2000,
+phy_init,  data,  phy,      0x10000,   0x1000,
+ota_0,     app,   ota_0,    0x20000,   0x100000,
+ota_1,     app,   ota_1,    0x120000,  0x100000,
+spiffs,    data,  spiffs,   0x220000,  0x1E0000,

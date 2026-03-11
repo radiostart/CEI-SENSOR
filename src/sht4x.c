@@ -1,16 +1,16 @@
-#include "sht45.h"
+#include "sht4x.h"
 #include "app_config.h"
 #include "driver/i2c.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
-static const char *TAG = "SHT45";
+static const char *TAG = "SHT4x";
 static i2c_port_t g_i2c_port = I2C_NUM_0;
-static uint8_t s_sht45_addr = SHT45_I2C_ADDR_A;
+static uint8_t s_sht4x_addr = SHT4X_I2C_ADDR_A;
 
 // CRC-8 (polynomial 0x31)
-static uint8_t sht45_calculate_crc(const uint8_t *data, uint8_t len) {
+static uint8_t sht4x_calculate_crc(const uint8_t *data, uint8_t len) {
   uint8_t crc = 0xFF;
   for (uint8_t i = 0; i < len; i++) {
     crc ^= data[i];
@@ -22,55 +22,36 @@ static uint8_t sht45_calculate_crc(const uint8_t *data, uint8_t len) {
 }
 
 static bool check_crc(const uint8_t *data, uint8_t len, uint8_t crc) {
-  return (sht45_calculate_crc(data, len) == crc);
+  return (sht4x_calculate_crc(data, len) == crc);
 }
 
-esp_err_t sht45_scan(void) {
-  esp_err_t ret;
-  i2c_cmd_handle_t cmd;
-
-  // Try 0x44
-  cmd = i2c_cmd_link_create();
+esp_err_t sht4x_scan(void) {
+  i2c_cmd_handle_t cmd = i2c_cmd_link_create();
   i2c_master_start(cmd);
-  i2c_master_write_byte(cmd, (SHT45_I2C_ADDR_A << 1) | I2C_MASTER_WRITE, true);
+  i2c_master_write_byte(cmd, (SHT4X_I2C_ADDR_A << 1) | I2C_MASTER_WRITE, true);
   i2c_master_stop(cmd);
-  ret = i2c_master_cmd_begin(g_i2c_port, cmd, pdMS_TO_TICKS(100));
+  esp_err_t ret = i2c_master_cmd_begin(g_i2c_port, cmd, pdMS_TO_TICKS(100));
   i2c_cmd_link_delete(cmd);
 
   if (ret == ESP_OK) {
-    s_sht45_addr = SHT45_I2C_ADDR_A;
-    ESP_LOGI(TAG, "Sensor detected at 0x44");
+    ESP_LOGI(TAG, "Sensor detected at 0x%02X", SHT4X_I2C_ADDR_A);
     return ESP_OK;
   }
 
-  // Try 0x45
-  cmd = i2c_cmd_link_create();
-  i2c_master_start(cmd);
-  i2c_master_write_byte(cmd, (SHT45_I2C_ADDR_B << 1) | I2C_MASTER_WRITE, true);
-  i2c_master_stop(cmd);
-  ret = i2c_master_cmd_begin(g_i2c_port, cmd, pdMS_TO_TICKS(100));
-  i2c_cmd_link_delete(cmd);
-
-  if (ret == ESP_OK) {
-    s_sht45_addr = SHT45_I2C_ADDR_B;
-    ESP_LOGI(TAG, "Sensor detected at 0x45");
-    return ESP_OK;
-  }
-
-  ESP_LOGW(TAG, "Sensor NOT detected at 0x44 or 0x45");
+  ESP_LOGW(TAG, "Sensor NOT detected at 0x%02X", SHT4X_I2C_ADDR_A);
   return ESP_ERR_NOT_FOUND;
 }
 
-esp_err_t sht45_read_temperature_humidity(sht45_data_t *data) {
+esp_err_t sht4x_read_temperature_humidity(sht4x_data_t *data) {
   if (data == NULL) return ESP_ERR_INVALID_ARG;
 
-  uint8_t cmd = SHT45_CMD_MEASURE_HIGH;
+  uint8_t cmd = SHT4X_CMD_MEASURE_HIGH;
   uint8_t rx_data[6] = {0};
 
   // Send measurement command
   i2c_cmd_handle_t cmd_handle = i2c_cmd_link_create();
   i2c_master_start(cmd_handle);
-  i2c_master_write_byte(cmd_handle, (s_sht45_addr << 1) | I2C_MASTER_WRITE, true);
+  i2c_master_write_byte(cmd_handle, (s_sht4x_addr << 1) | I2C_MASTER_WRITE, true);
   i2c_master_write_byte(cmd_handle, cmd, true);
   i2c_master_stop(cmd_handle);
 
@@ -78,7 +59,7 @@ esp_err_t sht45_read_temperature_humidity(sht45_data_t *data) {
   i2c_cmd_link_delete(cmd_handle);
 
   if (ret != ESP_OK) {
-    ESP_LOGE(TAG, "Measure cmd failed (0x%02X): %s", s_sht45_addr, esp_err_to_name(ret));
+    ESP_LOGE(TAG, "Measure cmd failed (0x%02X): %s", s_sht4x_addr, esp_err_to_name(ret));
     return ret;
   }
 
@@ -88,7 +69,7 @@ esp_err_t sht45_read_temperature_humidity(sht45_data_t *data) {
   // Read data
   cmd_handle = i2c_cmd_link_create();
   i2c_master_start(cmd_handle);
-  i2c_master_write_byte(cmd_handle, (s_sht45_addr << 1) | I2C_MASTER_READ, true);
+  i2c_master_write_byte(cmd_handle, (s_sht4x_addr << 1) | I2C_MASTER_READ, true);
   i2c_master_read(cmd_handle, rx_data, 6, I2C_MASTER_LAST_NACK);
   i2c_master_stop(cmd_handle);
 
@@ -96,7 +77,7 @@ esp_err_t sht45_read_temperature_humidity(sht45_data_t *data) {
   i2c_cmd_link_delete(cmd_handle);
 
   if (ret != ESP_OK) {
-    ESP_LOGE(TAG, "Data read failed (0x%02X): %s", s_sht45_addr, esp_err_to_name(ret));
+    ESP_LOGE(TAG, "Data read failed (0x%02X): %s", s_sht4x_addr, esp_err_to_name(ret));
     return ret;
   }
 
@@ -125,12 +106,12 @@ esp_err_t sht45_read_temperature_humidity(sht45_data_t *data) {
   return ESP_OK;
 }
 
-esp_err_t sht45_run_heater_high_power(void) {
-  uint8_t cmd = SHT45_CMD_HEATER_200MW_01S;
+esp_err_t sht4x_run_heater_high_power(void) {
+  uint8_t cmd = SHT4X_CMD_HEATER_200MW_01S;
 
   i2c_cmd_handle_t cmd_handle = i2c_cmd_link_create();
   i2c_master_start(cmd_handle);
-  i2c_master_write_byte(cmd_handle, (s_sht45_addr << 1) | I2C_MASTER_WRITE, true);
+  i2c_master_write_byte(cmd_handle, (s_sht4x_addr << 1) | I2C_MASTER_WRITE, true);
   i2c_master_write_byte(cmd_handle, cmd, true);
   i2c_master_stop(cmd_handle);
 
@@ -149,7 +130,7 @@ esp_err_t sht45_run_heater_high_power(void) {
   uint8_t rx_data[6] = {0};
   cmd_handle = i2c_cmd_link_create();
   i2c_master_start(cmd_handle);
-  i2c_master_write_byte(cmd_handle, (s_sht45_addr << 1) | I2C_MASTER_READ, true);
+  i2c_master_write_byte(cmd_handle, (s_sht4x_addr << 1) | I2C_MASTER_READ, true);
   i2c_master_read(cmd_handle, rx_data, 6, I2C_MASTER_LAST_NACK);
   i2c_master_stop(cmd_handle);
   i2c_master_cmd_begin(g_i2c_port, cmd_handle, pdMS_TO_TICKS(200));

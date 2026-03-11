@@ -1,6 +1,6 @@
 /**
  * @file display_service.c
- * @brief 디스플레이 서비스 구현 - BakeTrack
+ * @brief 디스플레이 서비스 구현 - Mellow Air
  */
 
 #include "display_service.h"

@@ -1,4 +1,4 @@
-# BakeTrack — Craft Environment Indicator (CEI-SENSOR)
+# Mellow Air — Craft Environment Indicator (CEI-SENSOR)
 
 제과제빵 환경의 온도/습도를 실시간 모니터링하는 IoT 센서 기기 펌웨어.
 발효, 숙성, 건조 등 공정별 목표 환경을 추적하고 e-Paper 디스플레이에 표시합니다.

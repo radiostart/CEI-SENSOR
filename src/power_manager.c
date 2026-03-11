@@ -8,6 +8,7 @@
 #include "battery_monitor.h"
 #include "button_handler.h"
 #include "display_service.h"
+#include "sensor_service.h"
 #include "driver/gpio.h"
 #include "esp_log.h"
 #include "esp_sleep.h"
@@ -46,26 +47,29 @@ void power_manager_init(void) {
   if (s_off_mode_deep_sleep) {
     s_off_mode_deep_sleep = false;
 
-    if (button_is_pressed()) {
-      // 버튼으로 깨어남 → 1초 홀드 확인 (전원 ON은 짧게)
-      ESP_LOGI(TAG, "OFF deep sleep → button, checking 1s hold...");
-      if (button_wait_hold(APP_BUTTON_POWERON_MS)) {
-        // 배터리 전압 확인
-        battery_usb_gpio_init();
-        battery_monitor_init();
-        uint32_t voltage = battery_read_voltage();
-        battery_monitor_deinit();
+    // 딥슬립 웨이크업 원인 확인 (GPIO = 버튼)
+    // 부팅에 ~300ms 걸리므로 button_is_pressed()로 확인하면 짧은 누름을 놓침
+    esp_sleep_wakeup_cause_t wakeup = esp_sleep_get_wakeup_cause();
+    if (wakeup == ESP_SLEEP_WAKEUP_GPIO) {
+      ESP_LOGI(TAG, "OFF deep sleep → button wakeup, power ON");
 
-        if (voltage > 0 && voltage < APP_BATTERY_RECOVERY_MV) {
-          ESP_LOGW(TAG, "Battery too low (%lumV) → back to deep sleep",
-                   (unsigned long)voltage);
-          enter_off_deep_sleep();
-        }
-        ESP_LOGI(TAG, "3s hold confirmed → power ON");
-      } else {
-        ESP_LOGI(TAG, "Short press → back to deep sleep");
+      // 배터리 전압 확인
+      battery_usb_gpio_init();
+      battery_monitor_init();
+      uint32_t voltage = battery_read_voltage();
+      battery_monitor_deinit();
+
+      if (voltage > 0 && voltage < APP_BATTERY_RECOVERY_MV) {
+        ESP_LOGW(TAG, "Battery too low (%lumV) → back to deep sleep",
+                 (unsigned long)voltage);
         enter_off_deep_sleep();
       }
+
+      // 버튼이 아직 눌려있으면 릴리즈 대기 (깔끔한 전원 ON)
+      if (button_is_pressed()) {
+        button_wait_release();
+      }
+      ESP_LOGI(TAG, "Power ON confirmed");
     } else {
       // 스퓨리어스 웨이크업 → 다시 딥슬립
       ESP_LOGI(TAG, "OFF deep sleep → spurious → back to sleep");
@@ -226,8 +230,44 @@ bool power_manager_handle_button(void) {
   } else {
     ESP_LOGI(TAG, "Short press detected -> Force update");
     s_force_update = true;
+    sensor_service_force_rescan();
   }
   return true;
+}
+
+void power_manager_handle_button_event(void) {
+  // 슬립에서 버튼으로 깨어난 경우 호출
+  // 버튼이 이미 놓여있어도 이벤트로 처리 (GPIO 레벨 의존 없음)
+
+  // 아직 눌려있으면 기존 handle_button 로직 사용
+  if (button_is_pressed()) {
+    power_manager_handle_button();
+    return;
+  }
+
+  // 이미 놓여있음 → 짧은 누름으로 간주, 더블클릭 대기
+  ESP_LOGI(TAG, "Button wakeup (released). Waiting for double-click...");
+  bool double_click = false;
+  for (int i = 0; i < 20; i++) {  // 20 × 20ms = 400ms
+    vTaskDelay(pdMS_TO_TICKS(20));
+    if (button_is_pressed()) {
+      vTaskDelay(pdMS_TO_TICKS(20));  // 디바운스
+      if (button_is_pressed()) {
+        double_click = true;
+        button_wait_release();
+        break;
+      }
+    }
+  }
+
+  if (double_click) {
+    ESP_LOGI(TAG, "Double-click detected -> BLE pairing mode");
+    s_pairing_requested = true;
+  } else {
+    ESP_LOGI(TAG, "Short press detected -> Force update");
+    s_force_update = true;
+    sensor_service_force_rescan();
+  }
 }
 
 void power_manager_request_update(void) {

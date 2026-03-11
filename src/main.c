@@ -1,9 +1,9 @@
 /**
  * @file main.c
- * @brief BakeTrack 메인 애플리케이션
+ * @brief Mellow Air 메인 애플리케이션
  *
  * 레이어드 아키텍처 기반 상태 머신
- * - sensor_service: SHT45 읽기 (히터 포함)
+ * - sensor_service: SHT4x 읽기 (히터 포함)
  * - spiffs_logger: SPIFFS 링 버퍼 로깅
  * - process_context: NVS 공정 컨텍스트
  * - display_service: E-Paper UI
@@ -35,9 +35,11 @@ static process_context_t s_proc_ctx;
 static int64_t s_boot_uptime_us = 0;       // 부팅 시 타이머 기준점
 static uint32_t s_elapsed_at_boot_sec = 0; // 부팅 전 누적 경과 시간
 static bool s_process_paused = false;      // 앱에서 일시정지 상태
+static bool s_done_notified = false;      // 공정 완료 알림 플래그
 static bool s_last_usb_connected = false;  // USB 연결 상태 추적
 static uint8_t s_ble_stale_count = 0;     // 유령 연결 감지 카운터
 static bool s_was_ble_connected = false;   // BLE 연결 해제 감지용
+static bool s_last_sensor_valid = false;   // 센서 연결 상태 변화 감지용
 
 // 현재 경과 시간 계산 (초)
 // 로컬 타이머 항상 진행, 앱이 ELAPSED_SYNC 전송 시 로컬 기준 보정
@@ -88,12 +90,29 @@ static void sync_app_elapsed(void) {
 #endif
 }
 
-// unix timestamp 근사값 (공정 start_time + elapsed)
-static uint32_t get_approx_timestamp(void) {
+// unix timestamp 계산
+// 1) 공정 활성: start_time + elapsed (정확)
+// 2) 시간 동기화 완료: boot_sec + offset (앱에서 수신한 unix 기준)
+// 3) 미동기화: boot_sec (앱에서 필터링)
+// SPIFFS 저장용: 항상 boot_sec (원시값) 반환
+// → 전송 시 ble_server가 현재 offset으로 일괄 변환
+// → resync해도 동일한 unix timestamp 보장
+static uint32_t get_raw_timestamp(void) {
+  return (uint32_t)(esp_timer_get_time() / 1000000LL);
+}
+
+// 실시간 BLE 전송용: unix timestamp 반환 (앱에 직접 전달)
+static uint32_t get_unix_timestamp(void) {
   if (s_proc_ctx.is_active && s_proc_ctx.start_time > 0) {
     return s_proc_ctx.start_time + get_elapsed_sec();
   }
-  return (uint32_t)(esp_timer_get_time() / 1000000LL);
+  uint32_t boot_sec = get_raw_timestamp();
+#if APP_ENABLE_BLE
+  if (ble_server_has_time_sync()) {
+    return (uint32_t)((int64_t)boot_sec + ble_server_get_time_offset());
+  }
+#endif
+  return boot_sec;
 }
 
 // ============================================================
@@ -115,7 +134,7 @@ static void app_init_all(void) {
   // USB 연결 시 INFO로 복원 (디버깅 편의)
   esp_log_level_set("*", ESP_LOG_WARN);
   ESP_LOGW(TAG, "====================================");
-  ESP_LOGW(TAG, "  BakeTrack Starting...");
+  ESP_LOGW(TAG, "  Mellow Air Starting...");
   ESP_LOGW(TAG, "====================================");
 
   s_boot_uptime_us = esp_timer_get_time();
@@ -268,16 +287,16 @@ static void handle_active_state(void) {
     ESP_LOGW(TAG, "Sensor read failed");
   }
 
-  // SPIFFS 로깅 (매 사이클)
+  // SPIFFS 로깅 (매 사이클) — boot_sec 원시값 저장
   if (data.valid) {
-    uint32_t ts = get_approx_timestamp();
+    uint32_t ts = get_raw_timestamp();
     spiffs_logger_append(data.temperature, data.humidity, ts);
   }
 
-  // BLE REALTIME_DATA: 앱 구독 중이면 매 사이클 전송
+  // BLE REALTIME_DATA: 앱 구독 중이면 매 사이클 전송 — unix timestamp 사용
 #if APP_ENABLE_BLE
   if (data.valid && ble_server_is_connected()) {
-    ble_server_notify_realtime(&data, get_approx_timestamp(), get_elapsed_sec());
+    ble_server_notify_realtime(&data, get_unix_timestamp(), get_elapsed_sec());
   }
 #endif
 
@@ -287,6 +306,7 @@ static void handle_active_state(void) {
     process_context_t new_ctx;
     if (ble_server_poll_process_config(&new_ctx)) {
       s_proc_ctx = new_ctx;
+      s_done_notified = false;  // 새 공정 → 완료 플래그 리셋
 
       // 앱이 ELAPSED_SYNC를 함께 전송했으면 시작값으로 사용 (0 리셋 방지)
       uint32_t start_elapsed = 0;
@@ -357,6 +377,14 @@ static void handle_active_state(void) {
     power_manager_request_update();
   }
 
+  // 센서 연결 상태 변화 감지 (연결↔해제 전환 시 즉시 화면 갱신)
+  bool sensor_state_changed = (data.valid != s_last_sensor_valid);
+  s_last_sensor_valid = data.valid;
+  if (sensor_state_changed) {
+    ESP_LOGI(TAG, "Sensor state changed: %s",
+             data.valid ? "connected" : "disconnected");
+  }
+
   // 변화 확인 또는 강제 업데이트
   bool force_update = power_manager_consume_update_request();
   bool significant_change = sensor_service_is_significant_change(&data);
@@ -378,12 +406,14 @@ static void handle_active_state(void) {
   // 공정 진행 중이면 매 사이클 화면 갱신 (진행률/타이머 반영)
   bool process_running = s_proc_ctx.is_active && s_proc_ctx.duration_min > 0;
 
-  // 디스플레이 갱신 필요 여부 (센서 변화 또는 공정 진행 시만)
-  bool need_display = significant_change || force_update || high_temp || process_running;
+  // 디스플레이 갱신 필요 여부 (센서 변화, 상태 전환, 공정 진행 시만)
+  bool need_display = significant_change || force_update || high_temp
+                      || process_running || sensor_state_changed;
 
   if (need_display) {
-    ESP_LOGI(TAG, ">>> UPDATE (change=%d, force=%d, hightemp=%d, proc=%d) <<<",
-             significant_change, force_update, high_temp, process_running);
+    ESP_LOGI(TAG, ">>> UPDATE (change=%d, force=%d, hightemp=%d, proc=%d, sensor=%d) <<<",
+             significant_change, force_update, high_temp, process_running,
+             sensor_state_changed);
 
     sensor_service_update_last(&data);
 
@@ -409,7 +439,6 @@ static void handle_active_state(void) {
 
     // 공정 완료 감지 → 전체 갱신 2회 깜빡임으로 시각적 알림
     {
-      static bool s_done_notified = false;
       uint32_t dur_sec = (uint32_t)s_proc_ctx.duration_min * 60;
       bool is_done = s_proc_ctx.is_active && dur_sec > 0 && elapsed >= dur_sec;
 
@@ -435,16 +464,24 @@ static void handle_active_state(void) {
       return;
     }
 
-    // 일반 BLE 브로드캐스트 창 (3초)
-    for (int i = 0; i < (APP_BLE_BROADCAST_MS / 100); i++) {
+    // 일반 BLE 브로드캐스트 창 (1.5초, 동기화 중이면 타이머 정지)
+    for (int t = 0; t < APP_BLE_BROADCAST_MS; ) {
       if (power_manager_handle_button()) {
         ble_server_pause();
         display_service_sleep();
         return;
       }
-      vTaskDelay(pdMS_TO_TICKS(100));
+      ble_server_process_unsent();
+      ble_server_process_deferred_mark();
+      ble_server_process_clear_data();
+      ble_server_process_ota();
+      bool syncing = ble_server_is_syncing();
+      bool ota_active = ble_server_is_ota_active();
+      int delay = (syncing || ota_active) ? 20 : 100;
+      vTaskDelay(pdMS_TO_TICKS(delay));
+      if (!syncing && !ota_active) t += delay;
     }
-    ble_server_pause();
+    if (!ble_server_is_syncing() && !ble_server_is_ota_active()) ble_server_pause();
     vTaskDelay(pdMS_TO_TICKS(100));
 #endif
 
@@ -469,8 +506,8 @@ static void handle_active_state(void) {
   // 슬립 전 BLE 관리
 #if APP_ENABLE_BLE
   if (ble_server_is_connected()) {
-    // 유령 연결 감지: 연결됐지만 앱이 구독하지 않으면 stale
-    if (!ble_server_is_subscribed()) {
+    // 유령 연결 감지: 연결됐지만 앱이 구독하지 않으면 stale (OTA 중 제외)
+    if (!ble_server_is_subscribed() && !ble_server_is_ota_active()) {
       s_ble_stale_count++;
       ESP_LOGI(TAG, "BLE connected but not subscribed (%d/3)", s_ble_stale_count);
       if (s_ble_stale_count >= 3) {
@@ -486,14 +523,27 @@ static void handle_active_state(void) {
     // 아직 연결 중이면 딜레이로 유지
     if (ble_server_is_connected()) {
       ESP_LOGI(TAG, "BLE connected - skipping sleep (delay instead)");
-      for (int i = 0; i < (APP_SLEEP_DURATION_US / 100000); i++) {
+      // UNSENT 동기화 중: 20ms 폴링 (BLE ACK 즉시 처리)
+      // 평시: 100ms 폴링 (절전)
+      int total_ms = (int)(APP_SLEEP_DURATION_US / 1000);
+      for (int t = 0; t < total_ms; ) {
         if (power_manager_handle_button()) return;
         // 앱 구독 시작 → 즉시 다음 사이클로 (센서 데이터 즉시 전송)
         if (ble_server_consume_initial_sync()) {
           ESP_LOGI(TAG, "App subscribed → immediate cycle");
           break;
         }
-        vTaskDelay(pdMS_TO_TICKS(100));
+        ble_server_process_unsent();
+        ble_server_process_reset_sent();
+        ble_server_process_deferred_mark();
+        ble_server_process_clear_data();
+        ble_server_process_ota();
+        bool syncing = ble_server_is_syncing();
+        bool ota_active = ble_server_is_ota_active();
+        int delay = (syncing || ota_active) ? 20 : 100;
+        vTaskDelay(pdMS_TO_TICKS(delay));
+        // 동기화/OTA 중이면 타이머 정지 (다음 사이클 진입 방지 → watchdog 방지)
+        if (!syncing && !ota_active) t += delay;
       }
       return; // 다음 사이클로
     }
@@ -515,16 +565,19 @@ static void handle_active_state(void) {
     return;
   }
 
-  // 슬립 진입 (적응형 주기: 공정 실행 중 또는 BLE 연결 = 10초, 유휴 = 30초)
-  bool is_idle = !s_proc_ctx.is_active && !ble_server_is_connected();
+  // 슬립 진입 (적응형 주기)
+  // - USB 연결: 항상 10초 (전력 여유, 센서 탈착 즉시 감지)
+  // - 배터리 유휴 (공정 미실행 + BLE 미연결): 30초 (절전)
+  // - 배터리 활성 (공정 실행 중 또는 BLE 연결): 10초
+  bool is_idle = !battery_is_usb_connected()
+                 && !s_proc_ctx.is_active && !ble_server_is_connected();
   uint64_t sleep_us = is_idle ? APP_SLEEP_IDLE_DURATION_US : APP_SLEEP_DURATION_US;
   wakeup_cause_t cause = power_manager_enter_sleep_us(sleep_us);
 
   if (cause == WAKEUP_CAUSE_BUTTON) {
     power_manager_request_update();
-  }
-
-  if (power_manager_handle_button()) {
+    // 슬립에서 버튼으로 깨어남 → 이미 놓여있어도 이벤트 처리 필요
+    power_manager_handle_button_event();
     return;
   }
 }

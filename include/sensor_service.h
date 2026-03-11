@@ -42,6 +42,13 @@ bool sensor_service_is_significant_change(const sensor_data_t *data);
  */
 void sensor_service_update_last(const sensor_data_t *data);
 
+/**
+ * @brief 센서 재스캔 강제 실행 (버튼 클릭 시 호출)
+ *
+ * 재시도 카운터를 리셋하여 다음 read에서 즉시 스캔
+ */
+void sensor_service_force_rescan(void);
+
 #ifdef __cplusplus
 }
 #endif

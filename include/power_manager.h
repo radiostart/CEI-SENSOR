@@ -68,6 +68,14 @@ void power_manager_enter_off_mode(void);
 bool power_manager_handle_button(void);
 
 /**
+ * @brief 슬립 웨이크업 후 버튼 이벤트 처리 (버튼이 놓여있어도 동작)
+ *
+ * 라이트슬립에서 버튼으로 깨어났을 때 호출.
+ * GPIO 레벨이 아닌 웨이크업 원인으로 판단하므로 릴리즈 후에도 처리 가능.
+ */
+void power_manager_handle_button_event(void);
+
+/**
  * @brief 강제 업데이트 플래그 설정
  */
 void power_manager_request_update(void);

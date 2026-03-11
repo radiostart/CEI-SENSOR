@@ -1,6 +1,6 @@
 /**
  * @file display_service.h
- * @brief 디스플레이 서비스 (UI 상위 레이어) - BakeTrack
+ * @brief 디스플레이 서비스 (UI 상위 레이어) - Mellow Air
  */
 
 #ifndef DISPLAY_SERVICE_H

@@ -1,11 +1,11 @@
 #
-# BakeTrack sdkconfig defaults
+# Mellow Air sdkconfig defaults
 # ESP32-C3 / ESP-IDF 5.4.1
 # 기본값과 다른 설정만 기재. 나머지는 ESP-IDF 기본값 사용.
 #
 
 # --- Flash ---
-CONFIG_ESPTOOLPY_FLASHSIZE_2MB=y
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
 CONFIG_ESPTOOLPY_FLASHMODE="dio"
 CONFIG_ESPTOOLPY_FLASHFREQ="80m"
 

@@ -1,6 +1,6 @@
 /**
  * @file ble_server.c
- * @brief BakeTrack BLE GATT Server 구현
+ * @brief Mellow Air BLE GATT Server 구현
  *
  * Service:
  *   BA5E0001-0000-1000-8000-00805F9B34FB
@@ -9,9 +9,13 @@
  *   BA5E0003: UNSENT_DATA    (Indicate + Write for ACK)
  *   BA5E0004: PROCESS_CONFIG (Write)
  *   BA5E0005: DEVICE_STATUS  (Read)
+ *   BA5E0008: TIME_SYNC      (Write) - 앱 시간 동기화
  */
 
 #include "ble_server.h"
+#if APP_ENABLE_OTA
+#include "ble_ota.h"
+#endif
 #include "esp_bt.h"
 #include "esp_bt_main.h"
 #include "esp_gap_ble_api.h"
@@ -68,6 +72,28 @@ static const uint8_t uuid_elapsed_sync[16] = {
     0xFB, 0x34, 0x9B, 0x5F, 0x80, 0x00, 0x00, 0x80,
     0x00, 0x10, 0x00, 0x00, 0x07, 0x00, 0x5E, 0xBA};
 
+// TIME_SYNC: BA5E0008-...
+static const uint8_t uuid_time_sync[16] = {
+    0xFB, 0x34, 0x9B, 0x5F, 0x80, 0x00, 0x00, 0x80,
+    0x00, 0x10, 0x00, 0x00, 0x08, 0x00, 0x5E, 0xBA};
+
+#if APP_ENABLE_OTA
+// OTA_CONTROL: BA5E0009-...
+static const uint8_t uuid_ota_control[16] = {
+    0xFB, 0x34, 0x9B, 0x5F, 0x80, 0x00, 0x00, 0x80,
+    0x00, 0x10, 0x00, 0x00, 0x09, 0x00, 0x5E, 0xBA};
+
+// OTA_DATA: BA5E000A-...
+static const uint8_t uuid_ota_data[16] = {
+    0xFB, 0x34, 0x9B, 0x5F, 0x80, 0x00, 0x00, 0x80,
+    0x00, 0x10, 0x00, 0x00, 0x0A, 0x00, 0x5E, 0xBA};
+
+// OTA_STATUS: BA5E000B-...
+static const uint8_t uuid_ota_status[16] = {
+    0xFB, 0x34, 0x9B, 0x5F, 0x80, 0x00, 0x00, 0x80,
+    0x00, 0x10, 0x00, 0x00, 0x0B, 0x00, 0x5E, 0xBA};
+#endif
+
 // ============================================================
 // 광고 파라미터
 // ============================================================
@@ -103,6 +129,7 @@ static bool     s_adv_enabled     = false;
 static bool     s_is_connected    = false;
 static uint16_t s_conn_id         = 0xFFFF;
 static esp_gatt_if_t s_gatts_if   = ESP_GATT_IF_NONE;
+static esp_bd_addr_t s_remote_bda = {0};  // 연결 파라미터 변경용
 
 // 서비스 핸들
 static uint16_t s_svc_handle        = 0;
@@ -116,10 +143,24 @@ static uint16_t s_hdl_proc_cfg      = 0;
 static uint16_t s_hdl_dev_status    = 0;
 static uint16_t s_hdl_dev_name      = 0;
 static uint16_t s_hdl_elapsed_sync  = 0;
+static uint16_t s_hdl_time_sync     = 0;
+#if APP_ENABLE_OTA
+static uint16_t s_hdl_ota_control   = 0;
+static uint16_t s_hdl_ota_data      = 0;
+static uint16_t s_hdl_ota_status    = 0;
+static uint16_t s_hdl_ota_status_cccd = 0;
+#endif
+
+// 시간 동기화 오프셋 (unix_ts = boot_sec + offset)
+static int64_t s_time_offset = 0;
+static bool s_has_time_sync = false;
 
 // Notify/Indicate 활성화 플래그
 static bool s_notify_realtime    = false;
 static bool s_indicate_unsent    = false;
+#if APP_ENABLE_OTA
+static bool s_notify_ota_status  = false;
+#endif
 static bool s_initial_sync_pending = false;  // 앱 구독 시작 → 즉시 데이터 전송 트리거
 
 // 앱 경과 시간 동기화 (ELAPSED_SYNC)
@@ -130,7 +171,7 @@ static bool s_app_elapsed_new = false;  // 새 값 수신 플래그 (consume 패
 static int64_t s_elapsed_sync_rx_us = 0;  // BLE 수신 시각 (처리 지연 보상용)
 
 // 기기 이름 (NVS 영구 저장)
-#define NVS_NAMESPACE "baketrack"
+#define NVS_NAMESPACE "mellowair"
 #define NVS_KEY_NAME  "dev_name"
 static char s_device_name[BLE_DEVICE_NAME_MAX_LEN + 1] = BLE_DEVICE_NAME;
 
@@ -144,6 +185,13 @@ typedef enum {
     CHAR_STEP_DEV_STATUS,
     CHAR_STEP_DEV_NAME,
     CHAR_STEP_ELAPSED_SYNC,
+    CHAR_STEP_TIME_SYNC,
+#if APP_ENABLE_OTA
+    CHAR_STEP_OTA_CONTROL,
+    CHAR_STEP_OTA_DATA,
+    CHAR_STEP_OTA_STATUS,
+    CHAR_STEP_OTA_STATUS_CCCD,
+#endif
     CHAR_STEP_DONE
 } char_add_step_t;
 
@@ -156,6 +204,25 @@ static bool s_new_proc_received = false;
 // UNSENT 데이터 동기화 상태
 static uint32_t s_unsent_seq = 0;
 static bool s_unsent_sync_active = false;
+static bool s_unsent_header_pending = false;  // 헤더 ACK 대기 중
+static bool s_unsent_needs_processing = false;  // 메인 루프에서 처리 필요
+static bool s_unsent_start_pending = false;      // 초기 카운트+헤더 필요
+static bool s_reset_sent_pending = false;        // sent 리셋 요청 (메인 루프 처리)
+static bool s_clear_data_pending = false;        // 데이터 전체 삭제 요청
+
+// 배치 전송 상태
+#define UNSENT_BATCH_SIZE 30
+static log_record_t s_batch_records[UNSENT_BATCH_SIZE];
+static uint32_t s_batch_log_idx[UNSENT_BATCH_SIZE];
+static uint32_t s_batch_count = 0;
+static uint32_t s_unsent_ring_offset = 0;  // 링 버퍼 스캔 위치
+
+// 동기화 후 지연 마킹 (mark_sent를 sync 완료 후 일괄 처리)
+static bool s_mark_sent_pending = false;
+// SLOW 파라미터 전환 플래그 (sync 미진행 시 첫 REALTIME notify에서 전환)
+static bool s_conn_params_set = false;
+static uint32_t s_mark_from_offset = 0;
+static uint32_t s_mark_to_offset = 0;
 
 // ============================================================
 // 내부 헬퍼: 다음 Characteristic 등록
@@ -186,7 +253,7 @@ static void register_next_char(esp_gatt_if_t gatts_if) {
         memcpy(uuid.uuid.uuid128, uuid_unsent, 16);
         esp_ble_gatts_add_char(s_svc_handle, &uuid,
             ESP_GATT_PERM_READ | ESP_GATT_PERM_WRITE,
-            ESP_GATT_CHAR_PROP_BIT_INDICATE | ESP_GATT_CHAR_PROP_BIT_WRITE,
+            ESP_GATT_CHAR_PROP_BIT_NOTIFY | ESP_GATT_CHAR_PROP_BIT_INDICATE | ESP_GATT_CHAR_PROP_BIT_WRITE | ESP_GATT_CHAR_PROP_BIT_WRITE_NR,
             NULL, NULL);
         break;
 
@@ -231,42 +298,156 @@ static void register_next_char(esp_gatt_if_t gatts_if) {
             NULL, NULL);
         break;
 
+    case CHAR_STEP_TIME_SYNC:
+        memcpy(uuid.uuid.uuid128, uuid_time_sync, 16);
+        esp_ble_gatts_add_char(s_svc_handle, &uuid,
+            ESP_GATT_PERM_WRITE,
+            ESP_GATT_CHAR_PROP_BIT_WRITE_NR,
+            NULL, NULL);
+        break;
+
+#if APP_ENABLE_OTA
+    case CHAR_STEP_OTA_CONTROL:
+        memcpy(uuid.uuid.uuid128, uuid_ota_control, 16);
+        esp_ble_gatts_add_char(s_svc_handle, &uuid,
+            ESP_GATT_PERM_WRITE,
+            ESP_GATT_CHAR_PROP_BIT_WRITE,
+            NULL, NULL);
+        break;
+
+    case CHAR_STEP_OTA_DATA:
+        memcpy(uuid.uuid.uuid128, uuid_ota_data, 16);
+        esp_ble_gatts_add_char(s_svc_handle, &uuid,
+            ESP_GATT_PERM_WRITE,
+            ESP_GATT_CHAR_PROP_BIT_WRITE_NR,
+            NULL, NULL);
+        break;
+
+    case CHAR_STEP_OTA_STATUS:
+        memcpy(uuid.uuid.uuid128, uuid_ota_status, 16);
+        esp_ble_gatts_add_char(s_svc_handle, &uuid,
+            ESP_GATT_PERM_READ,
+            ESP_GATT_CHAR_PROP_BIT_READ | ESP_GATT_CHAR_PROP_BIT_NOTIFY,
+            NULL, NULL);
+        break;
+
+    case CHAR_STEP_OTA_STATUS_CCCD: {
+        esp_bt_uuid_t cccd = {.len = ESP_UUID_LEN_16, .uuid.uuid16 = cccd_uuid};
+        uint8_t val[2] = {0, 0};
+        esp_attr_value_t attr = {.attr_max_len = 2, .attr_len = 2, .attr_value = val};
+        esp_ble_gatts_add_char_descr(s_svc_handle, &cccd,
+            ESP_GATT_PERM_READ | ESP_GATT_PERM_WRITE, &attr, NULL);
+        break;
+    }
+#endif
+
     default:
         break;
     }
 }
 
 // ============================================================
-// UNSENT 데이터 동기화: 첫 청크 전송
+// 연결 파라미터 전환 (동기화 속도 최적화)
 // ============================================================
-static void unsent_send_next(void) {
+static void set_conn_params_fast(void) {
+    esp_ble_conn_update_params_t p = {0};
+    memcpy(p.bda, s_remote_bda, sizeof(esp_bd_addr_t));
+    p.min_int = 0x06;   // 7.5ms (최소)
+    p.max_int = 0x10;   // 20ms
+    p.latency = 0;      // 스킵 없음
+    p.timeout = 200;    // 2000ms
+    esp_ble_gap_update_conn_params(&p);
+    ESP_LOGI(TAG, "Conn params → FAST (7.5-20ms, lat=0)");
+}
+
+static void set_conn_params_slow(void) {
+    esp_ble_conn_update_params_t p = {0};
+    memcpy(p.bda, s_remote_bda, sizeof(esp_bd_addr_t));
+    p.min_int = 0x190;  // 500ms (0x190 × 1.25ms)
+    p.max_int = 0x1F4;  // 625ms (0x1F4 × 1.25ms)
+    p.latency = 4;
+    p.timeout = 800;    // 8000ms — must > (1+latency)*max_int*2 = 6250ms
+    esp_ble_gap_update_conn_params(&p);
+    ESP_LOGI(TAG, "Conn params → SLOW (500-625ms, lat=4)");
+}
+
+// ============================================================
+// UNSENT 데이터 동기화: 배치 전송 (Notify)
+// ============================================================
+static void unsent_send_batch(void) {
     if (!s_is_connected || !s_indicate_unsent) return;
 
-    log_record_t rec;
-    uint32_t log_idx;
-    esp_err_t ret = spiffs_logger_read_unsent(s_unsent_seq, &rec, &log_idx);
+    // 1단계: 이전 스캔 위치부터 이어서 읽기 (O(batch) 성능)
+    uint32_t prev_ring_offset = s_unsent_ring_offset;  // 되감기용 저장
+    spiffs_logger_read_unsent_batch(s_unsent_ring_offset, s_batch_records,
+                                    s_batch_log_idx, UNSENT_BATCH_SIZE,
+                                    &s_batch_count, &s_unsent_ring_offset);
 
-    ble_unsent_chunk_t chunk;
-    memset(&chunk, 0, sizeof(chunk));
-
-    if (ret == ESP_OK) {
-        chunk.type      = 0;  // data
-        chunk.seq       = (uint16_t)s_unsent_seq;
-        chunk.timestamp = rec.timestamp;
-        chunk.temp_x10  = (int16_t)(rec.temp * 10);
-        chunk.humi_x10  = (int16_t)(rec.humidity * 10);
-        chunk.flags     = 0;
-        ESP_LOGI(TAG, "Sending unsent chunk seq=%u", (unsigned)s_unsent_seq);
-    } else {
-        // 전송 완료
-        chunk.type = 1;  // end_of_data
-        chunk.seq  = (uint16_t)s_unsent_seq;
+    if (s_batch_count == 0) {
+        // 전송 완료 → end_of_data 먼저 전송, 그 후 절전 파라미터 복원
+        ble_unsent_chunk_t end;
+        memset(&end, 0, sizeof(end));
+        end.type = 1;
+        end.seq  = (uint16_t)s_unsent_seq;
         s_unsent_sync_active = false;
-        ESP_LOGI(TAG, "Unsent sync complete (total=%u)", (unsigned)s_unsent_seq);
+        esp_ble_gatts_send_indicate(s_gatts_if, s_conn_id, s_hdl_unsent,
+                                    sizeof(end), (uint8_t *)&end, false);
+        set_conn_params_slow();
+        s_conn_params_set = true;  // SLOW 이미 설정됨
+        // 동기화 완료 → 지연 마킹 예약
+        s_mark_sent_pending = true;
+        s_mark_to_offset = s_unsent_ring_offset;
+        ESP_LOGI(TAG, "Unsent sync complete (total=%u), mark deferred (%u-%u)",
+                 (unsigned)s_unsent_seq,
+                 (unsigned)s_mark_from_offset, (unsigned)s_mark_to_offset);
+        return;
     }
 
-    esp_ble_gatts_send_indicate(s_gatts_if, s_conn_id, s_hdl_unsent,
-                                sizeof(chunk), (uint8_t *)&chunk, true);
+    // 2단계: 캐싱된 레코드로 배치 전송 (SPIFFS I/O 없음)
+    // ESP32-C3 BLE TX 버퍼 제한 → 3개마다 yield (TX ~10 슬롯)
+    // TX 실패 시 yield 후 1회 재시도 → 재실패 시 전체 배치 되감기 (0x80 마커 보장)
+    #define TX_FLUSH_INTERVAL 3
+    bool tx_failed = false;
+    for (uint32_t i = 0; i < s_batch_count; i++) {
+        if (i > 0 && (i % TX_FLUSH_INTERVAL) == 0) {
+            vTaskDelay(pdMS_TO_TICKS(3));
+        }
+
+        ble_unsent_chunk_t chunk;
+        memset(&chunk, 0, sizeof(chunk));
+        chunk.type      = 0;
+        chunk.seq       = (uint16_t)(s_unsent_seq + i);
+        chunk.timestamp = s_batch_records[i].timestamp;
+        if (s_has_time_sync && chunk.timestamp < 1600000000) {
+            chunk.timestamp = (uint32_t)((int64_t)chunk.timestamp + s_time_offset);
+        }
+        chunk.temp_x10  = (int16_t)(s_batch_records[i].temp * 10);
+        chunk.humi_x10  = (int16_t)(s_batch_records[i].humidity * 10);
+        chunk.flags     = (i == s_batch_count - 1) ? 0x80 : 0;
+
+        esp_err_t ret = esp_ble_gatts_send_indicate(s_gatts_if, s_conn_id,
+                            s_hdl_unsent, sizeof(chunk), (uint8_t *)&chunk, false);
+        if (ret != ESP_OK) {
+            // TX queue full → yield 10ms 후 1회 재시도
+            vTaskDelay(pdMS_TO_TICKS(10));
+            ret = esp_ble_gatts_send_indicate(s_gatts_if, s_conn_id,
+                        s_hdl_unsent, sizeof(chunk), (uint8_t *)&chunk, false);
+            if (ret != ESP_OK) {
+                ESP_LOGW(TAG, "TX failed at %u/%u after retry",
+                         (unsigned)i, (unsigned)s_batch_count);
+                tx_failed = true;
+                break;
+            }
+        }
+    }
+    if (tx_failed) {
+        // 전체 배치 되감기 → 다음 사이클에서 재시도
+        s_unsent_ring_offset = prev_ring_offset;
+        s_batch_count = 0;
+        s_unsent_needs_processing = true;
+        return;
+    }
+    ESP_LOGI(TAG, "Sent batch of %u (seq=%u)", (unsigned)s_batch_count, (unsigned)s_unsent_seq);
 }
 
 // ============================================================
@@ -287,8 +468,13 @@ static void gatts_event_handler(esp_gatts_cb_event_t event,
                 .id.uuid.len = ESP_UUID_LEN_128,
             };
             memcpy(svc_id.id.uuid.uuid.uuid128, svc_uuid, 16);
-            // 15 핸들: 서비스(1) + 6chars×2 + 2CCCDs + 여유1
-            esp_ble_gatts_create_service(gatts_if, &svc_id, 16);
+#if APP_ENABLE_OTA
+            // 26 핸들: 서비스(1) + 10chars×2 + 3CCCDs + 여유2
+            esp_ble_gatts_create_service(gatts_if, &svc_id, 26);
+#else
+            // 18 핸들: 서비스(1) + 7chars×2 + 2CCCDs + 여유1
+            esp_ble_gatts_create_service(gatts_if, &svc_id, 18);
+#endif
         }
         break;
 
@@ -323,9 +509,31 @@ static void gatts_event_handler(esp_gatts_cb_event_t event,
             break;
         case CHAR_STEP_ELAPSED_SYNC:
             s_hdl_elapsed_sync = param->add_char.attr_handle;
+            s_add_step = CHAR_STEP_TIME_SYNC;
+            break;
+        case CHAR_STEP_TIME_SYNC:
+            s_hdl_time_sync = param->add_char.attr_handle;
+#if APP_ENABLE_OTA
+            s_add_step = CHAR_STEP_OTA_CONTROL;
+#else
             s_add_step = CHAR_STEP_DONE;
             ESP_LOGI(TAG, "All chars registered");
+#endif
             break;
+#if APP_ENABLE_OTA
+        case CHAR_STEP_OTA_CONTROL:
+            s_hdl_ota_control = param->add_char.attr_handle;
+            s_add_step = CHAR_STEP_OTA_DATA;
+            break;
+        case CHAR_STEP_OTA_DATA:
+            s_hdl_ota_data = param->add_char.attr_handle;
+            s_add_step = CHAR_STEP_OTA_STATUS;
+            break;
+        case CHAR_STEP_OTA_STATUS:
+            s_hdl_ota_status = param->add_char.attr_handle;
+            s_add_step = CHAR_STEP_OTA_STATUS_CCCD;
+            break;
+#endif
         default:
             break;
         }
@@ -344,6 +552,13 @@ static void gatts_event_handler(esp_gatts_cb_event_t event,
             s_hdl_unsent_cccd = param->add_char_descr.attr_handle;
             s_add_step = CHAR_STEP_PROC_CFG;
             break;
+#if APP_ENABLE_OTA
+        case CHAR_STEP_OTA_STATUS_CCCD:
+            s_hdl_ota_status_cccd = param->add_char_descr.attr_handle;
+            s_add_step = CHAR_STEP_DONE;
+            ESP_LOGI(TAG, "All chars registered (incl. OTA)");
+            break;
+#endif
         default:
             break;
         }
@@ -355,22 +570,18 @@ static void gatts_event_handler(esp_gatts_cb_event_t event,
     case ESP_GATTS_CONNECT_EVT:
         s_is_connected = true;
         s_conn_id = param->connect.conn_id;
+        memcpy(s_remote_bda, param->connect.remote_bda, sizeof(esp_bd_addr_t));
         s_notify_realtime = false;
         s_indicate_unsent  = false;
         s_unsent_seq = 0;
+        s_unsent_ring_offset = 0;
         s_unsent_sync_active = false;
+        s_unsent_header_pending = false;
+        s_conn_params_set = false;
         ESP_LOGI(TAG, "BLE Connected (conn_id=%d)", s_conn_id);
-        // 연결 파라미터 협상: 절전을 위해 인터벌 확대
-        {
-            esp_ble_conn_update_params_t conn_params = {0};
-            memcpy(conn_params.bda, param->connect.remote_bda,
-                   sizeof(esp_bd_addr_t));
-            conn_params.min_int = 0x190;  // 500ms (0x190 * 0.625ms)
-            conn_params.max_int = 0x1F4;  // 625ms (0x1F4 * 0.625ms)
-            conn_params.latency = 4;      // 4회 스킵 허용 (실질 ~2.5초)
-            conn_params.timeout = 600;    // 6000ms supervision timeout
-            esp_ble_gap_update_conn_params(&conn_params);
-        }
+        // 연결 파라미터: OS 기본값 유지 (~30ms, iOS/Android)
+        // SLOW 전환은 sync 완료 후 또는 첫 REALTIME notify 시 수행
+        // (CONNECT 시 SLOW 설정 → FAST 협상 지연 문제 방지)
         break;
 
     case ESP_GATTS_DISCONNECT_EVT:
@@ -379,6 +590,13 @@ static void gatts_event_handler(esp_gatts_cb_event_t event,
         s_notify_realtime = false;
         s_indicate_unsent  = false;
         s_unsent_sync_active = false;
+        s_unsent_header_pending = false;
+        s_unsent_needs_processing = false;
+        s_unsent_start_pending = false;
+#if APP_ENABLE_OTA
+        s_notify_ota_status = false;
+        ble_ota_reset();
+#endif
         // 앱 elapsed 상태는 유지 (main.c에서 disconnect 전환 시 참조)
         ESP_LOGI(TAG, "BLE Disconnected");
         // 재연결 대비: fast 광고로 자동 재시작
@@ -403,29 +621,51 @@ static void gatts_event_handler(esp_gatts_cb_event_t event,
                 }
                 ESP_LOGI(TAG, "REALTIME notify %s", s_notify_realtime ? "ON" : "OFF");
             }
-            // UNSENT_DATA CCCD
+            // UNSENT_DATA CCCD (Notify=0x01 또는 Indicate=0x02 모두 수용)
             else if (handle == s_hdl_unsent_cccd && len >= 2) {
                 uint16_t cccd = val[0] | (val[1] << 8);
-                s_indicate_unsent = (cccd == 0x0002);
-                ESP_LOGI(TAG, "UNSENT indicate %s", s_indicate_unsent ? "ON" : "OFF");
+                s_indicate_unsent = ((cccd & 0x0003) != 0);
+                ESP_LOGI(TAG, "UNSENT subscribe %s (cccd=0x%04x)",
+                         s_indicate_unsent ? "ON" : "OFF", cccd);
                 if (s_indicate_unsent && !s_unsent_sync_active) {
-                    // 연결 후 indicate 활성화 시 동기화 시작
+                    // 구독 시점에 즉시 FAST 전환 요청 (협상 시간 확보)
+                    set_conn_params_fast();
                     s_unsent_seq = 0;
+                    s_batch_count = 0;
+                    s_unsent_ring_offset = 0;
+                    s_mark_from_offset = 0;  // 마킹 시작 위치 저장
                     s_unsent_sync_active = true;
-                    unsent_send_next();
+                    s_unsent_start_pending = true;
+                    s_unsent_needs_processing = true;
+                    ESP_LOGI(TAG, "UNSENT sync requested (deferred to main loop)");
                 }
             }
-            // UNSENT_DATA Write (앱 ACK)
+            // UNSENT_DATA Write (앱 ACK) — 플래그만 설정, SPIFFS I/O는 메인 루프
             else if (handle == s_hdl_unsent && len >= 1 && val[0] == 0xAC) {
-                // ACK: 현재 seq 레코드를 sent=1로 표시하고 다음 전송
-                log_record_t rec;
-                uint32_t log_idx;
-                if (spiffs_logger_read_unsent(s_unsent_seq, &rec, &log_idx) == ESP_OK) {
-                    spiffs_logger_mark_sent(log_idx);
-                }
-                s_unsent_seq++;
-                if (s_unsent_sync_active) {
-                    unsent_send_next();
+                s_unsent_needs_processing = true;
+            }
+            // UNSENT_DATA Write (sent 플래그 리셋 명령: 0x52 = 'R')
+            else if (handle == s_hdl_unsent && len >= 1 && val[0] == 0x52) {
+                s_reset_sent_pending = true;
+                ESP_LOGI(TAG, "Sent flags reset requested (deferred)");
+            }
+            // UNSENT_DATA Write (데이터 전체 삭제: 0x44 = 'D')
+            else if (handle == s_hdl_unsent && len >= 1 && val[0] == 0x44) {
+                s_clear_data_pending = true;
+                ESP_LOGI(TAG, "Data clear requested (deferred)");
+            }
+            // UNSENT_DATA Write (재동기화 명령: 0x53 = 'S')
+            else if (handle == s_hdl_unsent && len >= 1 && val[0] == 0x53) {
+                if (s_indicate_unsent && !s_unsent_sync_active) {
+                    set_conn_params_fast();
+                    s_unsent_seq = 0;
+                    s_batch_count = 0;
+                    s_unsent_ring_offset = 0;
+                    s_mark_from_offset = 0;
+                    s_unsent_sync_active = true;
+                    s_unsent_start_pending = true;
+                    s_unsent_needs_processing = true;
+                    ESP_LOGI(TAG, "UNSENT resync requested (0x53)");
                 }
             }
             // DEVICE_NAME Write
@@ -460,6 +700,35 @@ static void gatts_event_handler(esp_gatts_cb_event_t event,
                 ESP_LOGI(TAG, "ELAPSED_SYNC rx: %us, paused=%d",
                          (unsigned)s_app_elapsed_sec, s_app_paused);
             }
+            // TIME_SYNC Write (앱 시간 동기화)
+            else if (handle == s_hdl_time_sync &&
+                     len >= sizeof(ble_time_sync_pkt_t)) {
+                const ble_time_sync_pkt_t *tpkt =
+                    (const ble_time_sync_pkt_t *)val;
+                uint32_t boot_sec = (uint32_t)(esp_timer_get_time() / 1000000LL);
+                s_time_offset = (int64_t)tpkt->unix_timestamp - (int64_t)boot_sec;
+                s_has_time_sync = true;
+                ESP_LOGI(TAG, "TIME_SYNC: app=%u, boot=%u, offset=%lld",
+                         (unsigned)tpkt->unix_timestamp, (unsigned)boot_sec,
+                         (long long)s_time_offset);
+            }
+#if APP_ENABLE_OTA
+            // OTA_CONTROL Write
+            else if (handle == s_hdl_ota_control && len >= 1) {
+                ble_ota_handle_control(val, len);
+            }
+            // OTA_DATA Write (Write Without Response)
+            else if (handle == s_hdl_ota_data && len > 0) {
+                ble_ota_handle_data(val, len);
+            }
+            // OTA_STATUS CCCD
+            else if (handle == s_hdl_ota_status_cccd && len >= 2) {
+                uint16_t cccd = val[0] | (val[1] << 8);
+                s_notify_ota_status = (cccd == 0x0001);
+                ESP_LOGI(TAG, "OTA_STATUS notify %s",
+                         s_notify_ota_status ? "ON" : "OFF");
+            }
+#endif
             // PROCESS_CONFIG Write
             else if (handle == s_hdl_proc_cfg &&
                      len >= sizeof(ble_process_config_pkt_t)) {
@@ -503,6 +772,19 @@ static void gatts_event_handler(esp_gatts_cb_event_t event,
                                         param->read.trans_id,
                                         ESP_GATT_OK, &rsp);
         }
+#if APP_ENABLE_OTA
+        else if (param->read.handle == s_hdl_ota_status) {
+            ble_ota_status_pkt_t ota_st;
+            ble_ota_poll_status(&ota_st);
+            esp_gatt_rsp_t rsp;
+            memset(&rsp, 0, sizeof(rsp));
+            rsp.attr_value.len = sizeof(ota_st);
+            memcpy(rsp.attr_value.value, &ota_st, sizeof(ota_st));
+            esp_ble_gatts_send_response(gatts_if, param->read.conn_id,
+                                        param->read.trans_id,
+                                        ESP_GATT_OK, &rsp);
+        }
+#endif
         else if (param->read.handle == s_hdl_dev_status) {
             ble_device_status_t status;
             memset(&status, 0, sizeof(status));
@@ -619,7 +901,7 @@ static void set_adv_data(void) {
 esp_err_t ble_server_init(void) {
     esp_err_t ret;
 
-    // NVS에서 기기 이름 로드 (없으면 기본값 "BakeTrack" 유지)
+    // NVS에서 기기 이름 로드 (없으면 기본값 "Mellow Air" 유지)
     {
         nvs_handle_t nvs;
         if (nvs_open(NVS_NAMESPACE, NVS_READONLY, &nvs) == ESP_OK) {
@@ -664,7 +946,7 @@ esp_err_t ble_server_init(void) {
     // BT 컨트롤러 슬립: 모든 설정 완료 후 활성화
     esp_bt_sleep_enable();
 
-    ESP_LOGI(TAG, "BLE GATT server initialized (BakeTrack)");
+    ESP_LOGI(TAG, "BLE GATT server initialized (Mellow Air)");
     return ESP_OK;
 }
 
@@ -701,6 +983,14 @@ void ble_server_notify_realtime(const sensor_data_t *data, uint32_t timestamp,
                                 uint32_t elapsed_sec) {
     if (!s_is_connected || !s_notify_realtime || data == NULL) return;
     if (s_hdl_realtime == 0) return;
+
+    // 첫 REALTIME notify 시 SLOW 전환
+    // 단, sync 중이거나 미전송 100건 이상이면 보류 (FAST 협상 지연 방지)
+    if (!s_conn_params_set && !s_unsent_sync_active &&
+        spiffs_logger_unsent_count() < 100) {
+        s_conn_params_set = true;
+        set_conn_params_slow();
+    }
 
     ble_realtime_pkt_t pkt;
     memset(&pkt, 0, sizeof(pkt));
@@ -748,6 +1038,109 @@ const char *ble_server_get_device_name(void) {
     return s_device_name;
 }
 
+bool ble_server_process_unsent(void) {
+    if (!s_unsent_needs_processing || !s_unsent_sync_active) return false;
+    if (!s_is_connected || !s_indicate_unsent) {
+        s_unsent_needs_processing = false;
+        return false;
+    }
+    s_unsent_needs_processing = false;
+
+    // 초기 시작: 미전송 레코드 수 + 헤더 전송
+    // unsent_count()는 O(n) 스캔이지만 동기화 시작 시 1회만 호출
+    if (s_unsent_start_pending) {
+        s_unsent_start_pending = false;
+        uint32_t total = spiffs_logger_unsent_count();
+        if (total > 0) {
+            // FAST 전환은 CCCD 구독 시점에 이미 요청됨
+            ble_unsent_chunk_t hdr;
+            memset(&hdr, 0, sizeof(hdr));
+            hdr.type = 2;  // header
+            hdr.seq  = 0;
+            hdr.timestamp = total;
+            s_unsent_header_pending = true;
+            ESP_LOGI(TAG, "Unsent sync start: total=%u", (unsigned)total);
+            esp_ble_gatts_send_indicate(s_gatts_if, s_conn_id,
+                s_hdl_unsent, sizeof(hdr), (uint8_t *)&hdr, true);
+        } else {
+            // 미전송 없음 → 즉시 end_of_data
+            ble_unsent_chunk_t end;
+            memset(&end, 0, sizeof(end));
+            end.type = 1;
+            end.seq  = 0;
+            s_unsent_sync_active = false;
+            esp_ble_gatts_send_indicate(s_gatts_if, s_conn_id, s_hdl_unsent,
+                                        sizeof(end), (uint8_t *)&end, false);
+            ESP_LOGI(TAG, "Unsent sync: no data");
+        }
+        return true;
+    }
+
+    // 헤더 ACK → 첫 배치 전송
+    if (s_unsent_header_pending) {
+        s_unsent_header_pending = false;
+        unsent_send_batch();
+        return true;
+    }
+
+    // 배치 ACK → mark_sent 생략 (sync 완료 후 일괄 처리) → 다음 배치 즉시 전송
+    {
+        s_unsent_seq += s_batch_count;
+        s_batch_count = 0;
+        unsent_send_batch();
+        ESP_LOGI(TAG, "Batch ACK → next batch (seq=%u)", (unsigned)s_unsent_seq);
+    }
+    return true;
+}
+
+bool ble_server_process_reset_sent(void) {
+    if (!s_reset_sent_pending) return false;
+    s_reset_sent_pending = false;
+    ESP_LOGW(TAG, "Executing sent flags reset...");
+    spiffs_logger_reset_sent_flags();
+    ESP_LOGW(TAG, "Sent flags reset complete");
+
+    // 리셋 완료 알림: UNSENT_DATA에 0x52 응답 (앱이 재구독 타이밍 판단)
+    if (s_is_connected && s_hdl_unsent != 0) {
+        uint8_t ack = 0x52;
+        esp_ble_gatts_send_indicate(s_gatts_if, s_conn_id, s_hdl_unsent,
+                                    1, &ack, false);
+        ESP_LOGI(TAG, "Reset complete notification sent");
+    }
+    return true;
+}
+
+bool ble_server_process_clear_data(void) {
+    if (!s_clear_data_pending) return false;
+    s_clear_data_pending = false;
+    ESP_LOGW(TAG, "Executing data clear...");
+    spiffs_logger_clear_all();
+    ESP_LOGW(TAG, "Data clear complete");
+
+    if (s_is_connected && s_hdl_unsent != 0) {
+        uint8_t ack = 0x44;
+        esp_ble_gatts_send_indicate(s_gatts_if, s_conn_id, s_hdl_unsent,
+                                    1, &ack, false);
+    }
+    return true;
+}
+
+bool ble_server_process_deferred_mark(void) {
+    if (!s_mark_sent_pending) return false;
+    s_mark_sent_pending = false;
+    ESP_LOGI(TAG, "Deferred mark_sent: range %u-%u",
+             (unsigned)s_mark_from_offset, (unsigned)s_mark_to_offset);
+    int64_t t0 = esp_timer_get_time();
+    spiffs_logger_mark_range_sent(s_mark_from_offset, s_mark_to_offset);
+    int64_t t1 = esp_timer_get_time();
+    ESP_LOGI(TAG, "Deferred mark_sent done: %lldms", (t1 - t0) / 1000);
+    return true;
+}
+
+bool ble_server_is_syncing(void) {
+    return s_unsent_sync_active || s_mark_sent_pending;
+}
+
 bool ble_server_has_app_elapsed(void) {
     return s_has_app_elapsed;
 }
@@ -775,3 +1168,38 @@ bool ble_server_consume_new_elapsed(uint32_t *elapsed, bool *paused) {
 int64_t ble_server_get_elapsed_sync_rx_time(void) {
     return s_elapsed_sync_rx_us;
 }
+
+bool ble_server_has_time_sync(void) {
+    return s_has_time_sync;
+}
+
+int64_t ble_server_get_time_offset(void) {
+    return s_time_offset;
+}
+
+#if APP_ENABLE_OTA
+bool ble_server_process_ota(void) {
+    ble_ota_status_pkt_t pkt;
+    if (!ble_ota_poll_status(&pkt)) return false;
+
+    // OTA 상태 변경 시 Notify 전송
+    if (s_is_connected && s_notify_ota_status && s_hdl_ota_status) {
+        esp_ble_gatts_send_indicate(s_gatts_if, s_conn_id, s_hdl_ota_status,
+                                    sizeof(pkt), (uint8_t *)&pkt, false);
+    }
+
+    // OTA 성공 → 3초 후 재부팅
+    if (ble_ota_needs_reboot()) {
+        ESP_LOGI(TAG, "OTA complete — rebooting...");
+        ble_ota_reboot();
+    }
+    return true;
+}
+
+bool ble_server_is_ota_active(void) {
+    return ble_ota_is_active();
+}
+#else
+bool ble_server_process_ota(void) { return false; }
+bool ble_server_is_ota_active(void) { return false; }
+#endif

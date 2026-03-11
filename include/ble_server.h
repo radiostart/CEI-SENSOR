@@ -1,6 +1,6 @@
 /**
  * @file ble_server.h
- * @brief BakeTrack BLE GATT Server
+ * @brief Mellow Air BLE GATT Server
  *
  * Service UUID: BA5E0001-0000-1000-8000-00805F9B34FB
  *
@@ -11,6 +11,7 @@
  *   DEVICE_STATUS  (Read)     - 펌웨어 버전, 저장소 사용량, 업타임
  *   DEVICE_NAME    (Read/Write) - 기기 이름
  *   ELAPSED_SYNC   (Write)    - 앱 경과 시간 동기화 (앱 우선)
+ *   TIME_SYNC      (Write)    - 앱 → 기기 시간 동기화 (unix timestamp)
  */
 
 #ifndef BLE_SERVER_H
@@ -25,7 +26,7 @@
 extern "C" {
 #endif
 
-#define BLE_DEVICE_NAME     "BakeTrack"
+#define BLE_DEVICE_NAME     "Mellow Air"
 #define BLE_DEVICE_NAME_MAX_LEN 20  // advertising 31바이트 제한 고려
 
 // ============================================================
@@ -81,6 +82,11 @@ typedef struct __attribute__((packed)) {
   uint32_t elapsed_sec;  // 앱의 경과 시간 (초)
   uint8_t  flags;        // bit0 = paused
 } ble_elapsed_sync_pkt_t;
+
+// TIME_SYNC write (4 bytes) — 앱 → 펌웨어 시간 동기화
+typedef struct __attribute__((packed)) {
+  uint32_t unix_timestamp;  // 앱의 현재 unix timestamp (초)
+} ble_time_sync_pkt_t;
 
 // ============================================================
 // API
@@ -153,6 +159,51 @@ bool ble_server_consume_new_elapsed(uint32_t *elapsed, bool *paused);
 
 /** @brief ELAPSED_SYNC BLE 수신 시각 (처리 지연 보상용) */
 int64_t ble_server_get_elapsed_sync_rx_time(void);
+
+/**
+ * @brief UNSENT 데이터 동기화 처리 (메인 루프에서 주기적 호출)
+ *
+ * BLE 콜백은 플래그만 설정하고, 실제 SPIFFS I/O는 이 함수에서 수행.
+ * 메인 루프의 vTaskDelay 루프에서 호출하여 디스플레이 갱신과 공존.
+ * @return true = 처리 수행됨
+ */
+bool ble_server_process_unsent(void);
+
+/**
+ * @brief sent 플래그 리셋 처리 (메인 루프에서 호출)
+ * @return true = 리셋 수행됨
+ */
+bool ble_server_process_reset_sent(void);
+
+/**
+ * @brief 동기화 완료 후 sent 플래그 일괄 마킹 (메인 루프에서 호출)
+ * @return true = 마킹 수행됨
+ */
+bool ble_server_process_deferred_mark(void);
+
+/**
+ * @brief 데이터 전체 삭제 처리 (메인 루프에서 호출)
+ * @return true = 삭제 수행됨
+ */
+bool ble_server_process_clear_data(void);
+
+/** @brief UNSENT 동기화 진행 중 여부 (전송 중 또는 마킹 대기 포함) */
+bool ble_server_is_syncing(void);
+
+/** @brief 시간 동기화 완료 여부 */
+bool ble_server_has_time_sync(void);
+
+/** @brief 시간 오프셋 조회 (unix_ts = boot_sec + offset) */
+int64_t ble_server_get_time_offset(void);
+
+/**
+ * @brief OTA 상태 Notify 처리 (메인 루프에서 호출)
+ * @return true = Notify 전송됨
+ */
+bool ble_server_process_ota(void);
+
+/** @brief OTA 진행 중 여부 (슬립 방지용) */
+bool ble_server_is_ota_active(void);
 
 #ifdef __cplusplus
 }

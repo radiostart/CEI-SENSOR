@@ -1,6 +1,6 @@
 /**
  * @file app_config.h
- * @brief BakeTrack 애플리케이션 전역 설정
+ * @brief Mellow Air 애플리케이션 전역 설정
  *
  * 모든 하드웨어 핀 설정, 타이밍 상수, 기능 플래그를 한 곳에서 관리
  */
@@ -18,6 +18,7 @@ extern "C" {
 // 기능 플래그
 // ============================================================
 #define APP_ENABLE_BLE 1        // BLE GATT Server 활성화 (0=비활성화)
+#define APP_ENABLE_OTA 1        // BLE OTA 펌웨어 업데이트 (4MB flash)
 #define APP_USE_DUMMY_SENSOR 0  // 더미 센서 모드 (1=테스트용)
 
 // ============================================================
@@ -74,11 +75,17 @@ extern "C" {
 #define APP_LOG_MAX_RECORDS     8640   // 10초 간격 24시간 (24 * 3600 / 10)
 
 // ============================================================
-// 펌웨어 버전
+// 펌웨어 버전 (Git 태그에서 자동 추출, 폴백: 0.0.0)
 // ============================================================
-#define APP_FW_MAJOR 1
+#ifndef APP_FW_MAJOR
+#define APP_FW_MAJOR 0
+#endif
+#ifndef APP_FW_MINOR
 #define APP_FW_MINOR 0
+#endif
+#ifndef APP_FW_PATCH
 #define APP_FW_PATCH 0
+#endif
 
 // ============================================================
 // 애플리케이션 상태

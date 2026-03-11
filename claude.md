@@ -1,11 +1,11 @@
-# BakeTrack — 구현 프롬프트 (한국어)
+# Mellow Air — 구현 프롬프트 (한국어)
 
 ---
 
 ## 1. 펌웨어 프롬프트 (ESP32-C3 / ESP-IDF)
 
 ```
-당신은 임베디드 펌웨어 엔지니어입니다. ESP32-C3와 ESP-IDF 프레임워크(Arduino 미사용)를 기반으로 BakeTrack IoT 센서 기기의 펌웨어를 구현하세요. 이 기기는 제과제빵 환경의 온도와 습도를 모니터링하고 2.13인치 e-Paper 디스플레이에 데이터를 표시합니다.
+당신은 임베디드 펌웨어 엔지니어입니다. ESP32-C3와 ESP-IDF 프레임워크(Arduino 미사용)를 기반으로 Mellow Air IoT 센서 기기의 펌웨어를 구현하세요. 이 기기는 제과제빵 환경의 온도와 습도를 모니터링하고 2.13인치 e-Paper 디스플레이에 데이터를 표시합니다.
 
 ---
 
@@ -13,11 +13,11 @@
 
 - MCU: ESP32-C3-MINI-1 (Espressif, RISC-V 160MHz)
 - 프레임워크: ESP-IDF v5.4.1 (PlatformIO, Arduino 미사용)
-- 센서: SHT45, I2C 통신 (메인 PCB에 4.7kΩ 풀업 저항 설치)
+- 센서: SHT4x (SHT41/SHT45 호환), I2C 통신 (메인 PCB에 4.7kΩ 풀업 저항 설치)
 - 디스플레이: 2.13인치 e-Paper BW (250×122px, SSD1680 컨트롤러), SPI 연결
-- 저장소: SPIFFS (데이터 로깅용 960KB 파티션)
+- 저장소: SPIFFS (데이터 로깅용 1920KB 파티션)
 - 통신: BLE (Bluetooth Low Energy, GATT Server, Bluedroid)
-- 플래시: 2MB (DIO 80MHz)
+- 플래시: 4MB (DIO 80MHz), OTA 지원 (APP_ENABLE_OTA=1)
 - 배터리: 1-cell Li-ion 3.7V (BMS 내장 배터리 팩 사용)
 - 충전: BQ24075 (USB 500mA, Power Path)
 
@@ -25,7 +25,7 @@
 
 ## 아키텍처
 
-**싱글 루프 상태 머신** 방식. 별도 FreeRTOS 태스크를 사용하지 않고, `app_main()` 내 단일 while 루프에서 상태별 처리.
+**싱글 루프 상태 머신** 방식. `app_main()` 내 단일 while 루프에서 상태별 처리. 유일한 예외: OTA 펌웨어 업데이트는 별도 FreeRTOS 태스크에서 실행 (메인 루프 비차단).
 
 ```
 app_main()
@@ -40,7 +40,8 @@ app_main()
        │    ├─ Elapsed Sync 보정
        │    ├─ 저전압 체크 (6사이클마다)
        │    ├─ USB 상태 변경 감지
-       │    ├─ 디스플레이 갱신 (유의미 변화 or 공정 진행 중)
+       │    ├─ 센서 연결 상태 변화 감지
+       │    ├─ 디스플레이 갱신 (유의미 변화 or 공정 진행 중 or 센서 상태 변화)
        │    ├─ BLE 브로드캐스트 창 (3초)
        │    └─ 슬립 진입 (light sleep / vTaskDelay)
        │
@@ -54,8 +55,8 @@ app_main()
 
 | GPIO | 신호명 | 기능 | 회로 상세 |
 |------|--------|------|-----------|
-| GPIO0 | I2C_SDA | SHT-45 센서 데이터 | 4.7kΩ 풀업 (R10), JST 4핀 커넥터 (J4) |
-| GPIO1 | I2C_SCL | SHT-45 센서 클럭 | 4.7kΩ 풀업 (R8), JST 4핀 커넥터 (J4) |
+| GPIO0 | I2C_SDA | SHT4x 센서 데이터 | 4.7kΩ 풀업 (R10), JST 4핀 커넥터 (J4) |
+| GPIO1 | I2C_SCL | SHT4x 센서 클럭 | 4.7kΩ 풀업 (R8), JST 4핀 커넥터 (J4) |
 | GPIO2 | BAT_ADC | 배터리 전압 ADC (ADC1_CH2) | 분압기: R2(47kΩ)+R1(47kΩ), R15(1kΩ) 직렬 보호, C11(0.47µF) 필터 |
 | GPIO3 | MAIN_BTN | 메인 버튼 (Active LOW) | RTC GPIO, 딥슬립 웨이크업 지원 |
 | GPIO4 | SPI_RST | E-Paper 리셋 | 47kΩ 풀업 (R17 → 3.3V) |
@@ -136,14 +137,20 @@ app_main()
 
 ## 기능 목록
 
-### 1. 센서 (SHT45 / I2C)
-- [x] ESP-IDF i2c 드라이버를 사용하여 SHT45 I2C 초기화
+### 1. 센서 (SHT4x / I2C)
+- [x] ESP-IDF i2c 드라이버를 사용하여 SHT4x I2C 초기화
 - [x] 10초 간격으로 온도 및 습도 읽기
-- [x] 결로 방지를 위한 SHT45 내장 히터 루틴 구현 (고출력, 200ms 이하 작동, 6시간 주기)
+- [x] 결로 방지를 위한 SHT4x 내장 히터 루틴 구현 (고출력, 200ms 이하 작동, 6시간 주기)
 - [x] 히터 작동 후 I2C 해제 → 2초 안정화 대기 → I2C 재초기화 후 측정 수행
 - [x] 온도가 80°C 이상일 때 오븐 경고 상태 플래그 설정
 - [x] I2C 사이클별 init/deinit (저전력): 센서 읽기 전 초기화 → 읽기 후 해제
-- [x] 센서 주소 자동 스캔 (0x44, 0x45 시도, 최초 1회 캐싱)
+- [x] 센서 주소: 0x44 고정 (SHT4x 기본형, B-variant 0x45 미사용)
+- [x] 센서 탈착 대응 (마그네틱 포고핀 커넥터):
+    - 매 사이클(10초) 센서 미감지 시 자동 스캔 (재시도 간격 없음, <1ms 오버헤드)
+    - 읽기 실패 시 센서 분리로 판단, 다음 사이클에서 재스캔
+    - I2C 버스 복구: 센서 핫스왑 시 SDA stuck LOW 방지 (SCL 9클럭 + STOP 조건)
+    - 센서 연결 상태 변화(연결↔해제) 감지 시 즉시 디스플레이 갱신
+    - 버튼 클릭 시 센서 재스캔 강제 실행 (`sensor_service_force_rescan`)
 - [x] 유의미한 변화 감지: 온도 ±0.2°C 또는 습도 ±1.5% 이상 시 디스플레이 갱신
 
 ### 2. e-Paper 디스플레이 (SPI)
@@ -172,7 +179,7 @@ app_main()
 - [x] ESP-IDF Bluedroid로 BLE 스택 초기화
 - [x] GATT Server로 동작하며 상시 advertisement 유지
 - [x] TX 출력: +9 dBm (ADV, SCAN, DEFAULT 모든 타입)
-- [x] 연결 파라미터: interval 30-50ms, latency 0, timeout 4000ms (iOS 호환)
+- [x] 연결 파라미터: 연결 시 OS 기본값 유지, 미전송 100건 미만이면 첫 REALTIME notify 시 SLOW 전환 (500-625ms, latency 4), 동기화 시 FAST 전환 (7.5-20ms, latency 0), 동기화 완료 후 SLOW 복원
 - [x] Advertising 전략:
     - USB 연결 시: Fast advertising (100-200ms interval)
     - 배터리 모드: Slow advertising (800-1600ms interval, 절전)
@@ -187,12 +194,19 @@ app_main()
     → CCCD 구독 감지 시 즉시 센서 읽기 및 전송 (initial sync)
     → 패킷: { uint32 timestamp, int16 temp_x10, int16 humi_x10, uint8 flags, pad[3], uint32 elapsed_sec }
 
-  UNSENT_DATA (Indicate, UUID: BA5E0003, 20 bytes/chunk)
-    → 앱 연결 시 sent == false 인 레코드 전체 조회
-    → 시간 순서대로 청크 단위(20바이트 패킷)로 전송
-    → 청크별로 앱의 ACK 수신 후 다음 청크 전송
-    → ACK 수신 완료된 레코드만 sent == true 로 갱신
-    → 전송 중 연결 끊김 시 마지막 ACK 지점부터 재개
+  UNSENT_DATA (Notify+Indicate, UUID: BA5E0003, 20 bytes/chunk)
+    → CCCD 구독 시 동기화 시작, 즉시 FAST 연결 파라미터 요청
+    → 동기화 시작 시 헤더 패킷 전송 (type=2, Indicate, timestamp=총 건수)
+    → 데이터는 배치 단위(30건) Notify 전송, 3개마다 yield (TX 버퍼 관리)
+    → 배치 마지막 레코드에 flags |= 0x80 마커 설정
+    → 앱은 마커 수신 시 ACK(0xAC) Write → 다음 배치 즉시 전송
+    → TX 실패 시 yield 후 1회 재시도, 재실패 시 전체 배치 롤백 (0x80 마커 보장)
+    → sent 마킹은 동기화 완료 후 일괄 처리 (deferred mark, SPIFFS I/O 최소화)
+    → 동기화 완료(type=1 end_of_data, Notify) 시 SLOW 파라미터 복원
+    → SPIFFS 읽기: 16레코드(256B) 청크 단위 순차 읽기 (개별 fseek 대비 ~10배 빠름)
+    → 파일 핸들 캐싱: 초기화 시 1회 open, 이후 재사용 (fopen 2-5초 블로킹 방지)
+    → 미전송 건수 NVS 캐싱: 부팅 시 O(n) 스캔 제거
+    → Write 명령: 0x52('R') = sent 플래그 전체 리셋, 0x53('S') = 재동기화 (FAST 전환 포함)
 
   PROCESS_CONFIG (Write, UUID: BA5E0004, 56 bytes)
     → 앱에서 공정 설정값 수신:
@@ -217,12 +231,52 @@ app_main()
     → PROCESS_CONFIG와 함께 전송 시 시작값으로 반영 (0 리셋 방지)
     → 앱 미연결 시 기기 로컬 타이머 독립 진행
 
+  TIME_SYNC (Write Without Response, UUID: BA5E0008, 4 bytes)
+    → 앱이 연결 직후 현재 unix timestamp 전송
+    → 패킷: { uint32_t unix_timestamp (LE) }
+    → 기기: offset = app_unix_ts - boot_sec 계산 → 이후 모든 타임스탬프에 적용
+    → UNSENT_DATA 전송 시 부팅 시간 기반 타임스탬프를 unix 변환
+    → REALTIME_DATA에도 공정 미활성 시 offset 적용
+    → 앱은 UNSENT_DATA 구독 전에 TIME_SYNC 전송 (순서 중요)
+
+  OTA_CONTROL (Write, UUID: BA5E0009)
+    → OTA 제어 명령 수신
+    → START(0x01): {cmd(1), total_size(4)} = 5 bytes → OTA 파티션 준비
+    → COMMIT(0x02): 이미지 검증 + 부트 파티션 전환
+    → ABORT(0x03): OTA 취소
+
+  OTA_DATA (Write Without Response, UUID: BA5E000A)
+    → 펌웨어 바이너리 청크 수신 (MTU-3 bytes/청크)
+    → esp_ota_write()로 플래시 기록
+    → 메인 루프 비차단 (ble_ota.c에서 직접 처리)
+
+  OTA_STATUS (Read/Notify, UUID: BA5E000B, 4 bytes)
+    → 진행 상태 Notify (1% 단위)
+    → 패킷: { uint8 state, uint8 progress_pct, uint8 error_code, uint8 _pad }
+    → state: IDLE(0), READY(1), RECEIVING(2), VERIFYING(3), SUCCESS(4), ERROR(5)
+
 - [x] BLE 연결/해제 이벤트 발생 시 센서 및 디스플레이 루프 중단 없이 처리
 - [x] BLE 재연결 시 활성 공정 자동 동기화 (앱→기기)
 - [x] BLE 연결 해제 시 경과 시간 NVS 저장 + 일시정지 해제
 
-### 5. 버튼 동작 (GPIO3 — MAIN_BTN)
-- [x] **단일 클릭**: 즉시 센서 읽기 + 디스플레이 갱신 + BLE 데이터 전송
+### 5. OTA 펌웨어 업데이트 (APP_ENABLE_OTA=1)
+- [x] BLE GATT를 통한 무선 펌웨어 업데이트
+- [x] 듀얼 OTA 파티션 (ota_0 + ota_1, 각 1MB)
+- [x] OTA 프로토콜 흐름:
+    1. 앱 → OTA_CONTROL: START {cmd=0x01, total_size}
+    2. 기기 → OTA_STATUS: READY
+    3. 앱 → OTA_DATA: 청크 반복 (MTU-3 bytes)
+    4. 기기 → OTA_STATUS: progress 갱신 (1% 단위)
+    5. 앱 → OTA_CONTROL: COMMIT {cmd=0x02}
+    6. 기기 → OTA_STATUS: VERIFYING → SUCCESS
+    7. 기기 자동 재부팅 (3초 후)
+- [x] esp_ota_end()로 이미지 무결성 검증
+- [x] OTA 진행 중 슬립 방지 (ble_ota_is_active)
+- [x] OTA 중 연결 해제 시 자동 취소 (ble_ota_reset)
+- [x] `#if APP_ENABLE_OTA` 조건부 컴파일 (비활성 시 코드 제거)
+
+### 6. 버튼 동작 (GPIO3 — MAIN_BTN)
+- [x] **단일 클릭**: 센서 재스캔 + 즉시 센서 읽기 + 디스플레이 갱신 + BLE 데이터 전송
 - [x] **더블 클릭** (400ms 이내): BLE 페어링 모드 진입
     - 30초간 Fast advertising으로 앱 연결 대기
     - E-Paper에 페어링 화면 표시 (남은 시간, 5초마다 갱신)
@@ -230,14 +284,14 @@ app_main()
 - [x] **3초 장기 누름**: 전원 끄기 (딥슬립 진입)
 - [x] **전원 ON**: 딥슬립에서 버튼 1초 홀드로 기동 (APP_BUTTON_POWERON_MS=1000)
 
-### 6. 즉시 동기화 (Initial Sync)
+### 7. 즉시 동기화 (Initial Sync)
 - [x] 앱이 REALTIME_DATA CCCD를 구독하면 `s_initial_sync_pending` 플래그 설정
 - [x] main.c/power_manager.c의 대기 루프에서 플래그 감지 시 즉시 센서 사이클 실행
 - [x] 앱 연결 직후 데이터 전송 지연 없이 즉시 동기화
 
-### 7. 전원 관리
+### 8. 전원 관리
 - [x] Light Sleep: 배터리 모드에서 10초 슬립 (타이머 + 버튼 + USB 웨이크업)
-- [x] USB 연결 시: light sleep 대신 vTaskDelay 사용 (JTAG 안정성)
+- [x] USB 연결 시: light sleep 대신 vTaskDelay 사용 (JTAG 안정성), 항상 10초 사이클 (유휴 30초 적용 안함)
 - [x] Deep Sleep OFF 모드: GPIO3 버튼 웨이크업만 (GPIO10은 RTC GPIO 아님)
 - [x] RTC_DATA_ATTR 플래그로 딥슬립 OFF 모드 상태 유지
 - [x] 저전압 자동 종료: 배터리 3300mV 미만 시 자동 딥슬립 (6사이클=60초마다 체크)
@@ -245,7 +299,7 @@ app_main()
 - [x] USB 상태 변경 감지 → 즉시 디스플레이 갱신 트리거
 - [x] BLE 연결 중: 슬립 대신 vTaskDelay로 연결 유지
 
-### 8. 시스템 및 안전
+### 9. 시스템 및 안전
 - [x] 80°C 임계값 감지 시:
     - 경고 플래그 설정
     - 다음 10초 주기 대기 없이 즉시 디스플레이 갱신
@@ -261,6 +315,7 @@ app_main()
 - 모든 영구 데이터는 딥슬립 및 전원 차단 후에도 NVS를 통해 유지
 - I2C 클럭: 50kHz (APP_I2C_FREQ_HZ), 케이블 최대 1.5m 대응
 - I2C 사이클별 init/deinit: 센서 읽기 전 초기화 → 읽기 후 해제 (저전력)
+- I2C 버스 복구: init 시 SDA stuck LOW 감지 → SCL 9클럭 토글 + STOP 조건 (센서 핫스왑 대응)
 - e-Paper SPI 클럭: 제조사 스펙 준수 (일반적으로 2~4MHz)
 - e-Paper 패널: EPD_RAM_WIDTH=128, EPD_PANEL_WIDTH=122, EPD_HEIGHT=250
 - SPIFFS 레코드 포맷은 저장 효율을 위해 바이너리 패킹 사용 (16 bytes/record)
@@ -274,6 +329,7 @@ app_main()
 - 공정 완료 시: 전체 갱신 2회 깜빡임 (시각적 알림)
 - 전원 OFF: 딥슬립 (GPIO3 버튼 웨이크업만, GPIO10은 RTC GPIO 아님)
 - 전원 ON: 딥슬립에서 1초 홀드 필요, 저전압 시(< 3500mV) 재진입
+- 적응형 슬립 주기: USB 연결=항상 10초, 배터리 활성(공정/BLE)=10초, 배터리 유휴=30초
 
 ### 경과 시간 동기화 (Elapsed Sync) 아키텍처
 
@@ -284,18 +340,20 @@ app_main()
 - 일시정지/재개: 항상 앱 값으로 보정 (s_process_paused 플래그)
 - 앱 미연결: 마지막 elapsed 기준으로 로컬 계속 카운팅, NVS 주기 저장 (100초)
 
-### 파티션 테이블 (2MB Flash)
+### 파티션 테이블 (4MB Flash, OTA)
 
 | Name | Type | Offset | Size |
 |------|------|--------|------|
 | nvs | data/nvs | 0x9000 | 20KB |
-| phy_init | data/phy | 0xE000 | 4KB |
-| factory | app | 0x10000 | 1MB |
-| spiffs | data/spiffs | 0x110000 | 960KB |
+| otadata | data/ota | 0xE000 | 8KB |
+| phy_init | data/phy | 0x10000 | 4KB |
+| ota_0 | app/ota_0 | 0x20000 | 1MB |
+| ota_1 | app/ota_1 | 0x120000 | 1MB |
+| spiffs | data/spiffs | 0x220000 | 1920KB |
 
 ### sdkconfig 주요 설정
 
-- Flash: 2MB, DIO, 80MHz
+- Flash: 4MB, DIO, 80MHz
 - BLE: Bluedroid, GATTS only (GATTC 비활성), BLE 4.2
 - Console: UART + USB JTAG secondary
 - Log: INFO 레벨
@@ -313,6 +371,7 @@ CEI-SENSOR/
 ├── include/
 │   ├── app_config.h           # 전역 설정 (핀맵, 임계값, 구조체)
 │   ├── battery_monitor.h      # 배터리 전압/USB 감지
+│   ├── ble_ota.h              # BLE OTA 펌웨어 업데이트
 │   ├── ble_server.h           # BLE GATT Server + 패킷 구조체
 │   ├── button_handler.h       # 버튼 이벤트 (short/long/double)
 │   ├── display_service.h      # 디스플레이 상위 서비스
@@ -324,12 +383,14 @@ CEI-SENSOR/
 │   ├── power_manager.h        # 전원 상태 머신 + 슬립 관리
 │   ├── process_context.h      # 공정 컨텍스트 NVS 저장/복원
 │   ├── sensor_glyphs_24px.h   # 24px 센서 아이콘 글리프
+│   ├── ota_update.h           # OTA 업데이트 모듈 (FreeRTOS 태스크)
 │   ├── sensor_service.h       # 센서 읽기 서비스
-│   ├── sht45.h                # SHT45 I2C 드라이버
+│   ├── sht4x.h                # SHT4x I2C 드라이버
 │   └── spiffs_logger.h        # SPIFFS 링 버퍼 로거
 └── src/
     ├── main.c                 # 메인 루프 + 상태 머신
     ├── battery_monitor.c      # ADC 배터리 측정 + USB PGOOD
+    ├── ble_ota.c              # BLE OTA 구현
     ├── ble_server.c           # BLE GATT 구현
     ├── button_handler.c       # 버튼 디바운스 + 이벤트 감지
     ├── display_service.c      # 디스플레이 서비스 구현
@@ -341,8 +402,9 @@ CEI-SENSOR/
     ├── power_manager.c        # 전원/슬립 관리
     ├── process_context.c      # NVS 공정 컨텍스트
     ├── sensor_glyphs_24px.c   # 글리프 데이터
-    ├── sensor_service.c       # SHT45 센서 서비스
-    ├── sht45.c                # SHT45 드라이버
+    ├── ota_update.c           # OTA 업데이트 (FreeRTOS 태스크)
+    ├── sensor_service.c       # SHT4x 센서 서비스
+    ├── sht4x.c                # SHT4x 드라이버
     └── spiffs_logger.c        # SPIFFS 로거
 ```
 
@@ -350,15 +412,15 @@ CEI-SENSOR/
 
 ## 연관 프로젝트
 
-### BakeTrack 모바일 앱 (CEI-APP)
+### Mellow Air 모바일 앱 (CEI-APP)
 - **경로**: `../CEI-APP`
 - **프레임워크**: Flutter (iOS + Android)
 - **BLE 라이브러리**: flutter_blue_plus v1.32.0
 - **역할**: BLE GATT Client — 이 펌웨어(GATT Server)와 통신하여 실시간 모니터링, 데이터 동기화, 공정 설정 전송을 수행
-- **BLE 프로토콜 공유**: 두 프로젝트는 동일한 GATT Service/Characteristic UUID(BA5E0001~0007)와 패킷 포맷을 사용. 한쪽을 변경하면 반드시 다른 쪽도 동기화 필요
+- **BLE 프로토콜 공유**: 두 프로젝트는 동일한 GATT Service/Characteristic UUID(BA5E0001~000B)와 패킷 포맷을 사용. 한쪽을 변경하면 반드시 다른 쪽도 동기화 필요
 - **앱의 claude.md**: `../CEI-APP/claude.md`
 
-### BakeTrack 하드웨어 회로도 (CEI-TOOL)
+### Mellow Air 하드웨어 회로도 (CEI-TOOL)
 - **경로**: `../CEI-TOOL`
 - **도구**: KiCad 9.0
 - **회로도**: `../CEI-TOOL/CEI-TOOL.kicad_sch` — GPIO 핀 매핑, 전압 분배기, 충전 IC(BQ24075) 회로 등 하드웨어 설계 참조

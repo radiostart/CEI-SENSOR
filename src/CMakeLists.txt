@@ -9,7 +9,7 @@ idf_component_register(
         "power_manager.c"
 
         # Driver Layer
-        "sht45.c"
+        "sht4x.c"
         "ble_server.c"
         "battery_monitor.c"
         "button_handler.c"
@@ -18,6 +18,10 @@ idf_component_register(
         "epd_ui.c"
         "epd_font.c"
         "epd_icons.c"
+
+        # OTA Layer
+        "ble_ota.c"
+        "ota_update.c"
 
         # Utility Layer
         "process_context.c"
@@ -29,5 +33,5 @@ idf_component_register(
     INCLUDE_DIRS
         "../include"
 
-    REQUIRES bt driver nvs_flash esp_timer spiffs
+    REQUIRES bt driver nvs_flash esp_timer spiffs app_update mbedtls
 )

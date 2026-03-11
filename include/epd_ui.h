@@ -1,6 +1,6 @@
 /**
  * @file epd_ui.h
- * @brief E-Paper UI 레이어 - BakeTrack 발효 모니터링 인터페이스
+ * @brief E-Paper UI 레이어 - Mellow Air 발효 모니터링 인터페이스
  *
  * 2.13인치 BW E-Paper용 세로형 UI (122 x 250 픽셀)
  *

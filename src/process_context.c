@@ -11,7 +11,7 @@
 
 static const char *TAG = "PROC_CTX";
 
-#define NVS_NAMESPACE "baketrack"
+#define NVS_NAMESPACE "mellowair"
 #define NVS_KEY_CTX   "proc_ctx"
 #define NVS_KEY_ELAPSED "elapsed"
 

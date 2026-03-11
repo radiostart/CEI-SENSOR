@@ -85,6 +85,56 @@ esp_err_t spiffs_logger_read_unsent(uint32_t seq, log_record_t *record,
  */
 esp_err_t spiffs_logger_mark_sent(uint32_t log_idx);
 
+/**
+ * @brief 여러 레코드를 한 번의 파일 열기로 sent=1 표시
+ * @param log_indices  내부 인덱스 배열
+ * @param count        배열 크기
+ * @return ESP_OK 성공
+ */
+esp_err_t spiffs_logger_mark_sent_batch(const uint32_t *log_indices, uint32_t count);
+
+/**
+ * @brief 미전송 레코드를 한 번의 파일 스캔으로 최대 max_count개 읽기
+ *
+ * ring_offset으로 스캔 시작 위치를 지정하여 O(batch_size) 성능 보장.
+ * @param ring_offset    링 버퍼 내 스캔 시작 오프셋 (첫 호출 시 0)
+ * @param records        읽은 레코드 배열 (OUT)
+ * @param log_indices    각 레코드의 내부 인덱스 (OUT, mark_sent에 사용)
+ * @param max_count      최대 읽을 개수 (배열 크기)
+ * @param out_count      실제 읽은 개수 (OUT)
+ * @param next_offset    다음 호출 시 사용할 오프셋 (OUT)
+ * @return ESP_OK 성공
+ */
+esp_err_t spiffs_logger_read_unsent_batch(uint32_t ring_offset,
+                                          log_record_t *records,
+                                          uint32_t *log_indices,
+                                          uint32_t max_count,
+                                          uint32_t *out_count,
+                                          uint32_t *next_offset);
+
+/**
+ * @brief 모든 레코드의 sent 플래그를 0으로 리셋 (테스트/디버그용)
+ * @return ESP_OK 성공
+ */
+esp_err_t spiffs_logger_reset_sent_flags(void);
+
+/**
+ * @brief 링 버퍼 오프셋 범위의 레코드를 sent=1로 일괄 표시
+ *
+ * 동기화 완료 후 호출. 16레코드(256B) 청크 단위로 읽기/수정/쓰기하여
+ * SPIFFS 페이지 연산 횟수를 최소화.
+ * @param from_offset  시작 링 오프셋 (inclusive)
+ * @param to_offset    종료 링 오프셋 (exclusive)
+ * @return ESP_OK 성공
+ */
+esp_err_t spiffs_logger_mark_range_sent(uint32_t from_offset, uint32_t to_offset);
+
+/**
+ * @brief 모든 로그 데이터 삭제 (파일 재생성 + 인덱스 리셋)
+ * @return ESP_OK 성공
+ */
+esp_err_t spiffs_logger_clear_all(void);
+
 #ifdef __cplusplus
 }
 #endif
