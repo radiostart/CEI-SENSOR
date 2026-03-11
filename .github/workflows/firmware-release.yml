@@ -55,23 +55,12 @@ jobs:
           generate_release_notes: true
           files: ${{ steps.prep.outputs.file_name }}
 
-      - name: Login to API
-        id: auth
-        run: |
-          TOKEN=$(curl -sf -X POST \
-            "${{ secrets.MELLOWAIR_API_URL }}/api/v1/auth/login" \
-            -H "Content-Type: application/json" \
-            -d "{\"email\":\"${{ secrets.MELLOWAIR_API_EMAIL }}\",\"password\":\"${{ secrets.MELLOWAIR_API_PASSWORD }}\"}" \
-            | python3 -c "import sys,json; print(json.load(sys.stdin)['token'])")
-          echo "::add-mask::$TOKEN"
-          echo "token=$TOKEN" >> "$GITHUB_OUTPUT"
-
       - name: Register firmware version on API
         continue-on-error: true
         run: |
           HTTP_CODE=$(curl -s -o /tmp/api_response.txt -w "%{http_code}" -X POST \
             "${{ secrets.MELLOWAIR_API_URL }}/api/v1/firmware_versions" \
-            -H "Authorization: Bearer ${{ steps.auth.outputs.token }}" \
+            -H "Authorization: Bearer ${{ secrets.FIRMWARE_API_TOKEN }}" \
             -H "Content-Type: application/json" \
             -d "{
               \"firmware_version\": {
