@@ -42,10 +42,13 @@ jobs:
           cp "$BIN_PATH" "$RELEASE_BIN"
           SHA256=$(shasum -a 256 "$RELEASE_BIN" | awk '{print $1}')
 
+          DOWNLOAD_URL="https://github.com/${{ github.repository }}/releases/download/${TAG}/${RELEASE_BIN}"
+
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "file_name=$RELEASE_BIN" >> "$GITHUB_OUTPUT"
           echo "sha256=$SHA256" >> "$GITHUB_OUTPUT"
+          echo "download_url=$DOWNLOAD_URL" >> "$GITHUB_OUTPUT"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -68,6 +71,7 @@ jobs:
                 \"github_tag\": \"${{ steps.prep.outputs.tag }}\",
                 \"file_name\": \"${{ steps.prep.outputs.file_name }}\",
                 \"checksum_sha256\": \"${{ steps.prep.outputs.sha256 }}\",
+                \"download_url\": \"${{ steps.prep.outputs.download_url }}\",
                 \"stable\": true,
                 \"force_update\": false
               }
