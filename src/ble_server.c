@@ -370,8 +370,11 @@ static void unsent_send_batch(void) {
         s_unsent_sync_active = false;
         esp_ble_gatts_send_indicate(s_gatts_if, s_conn_id, s_hdl_unsent,
                                     sizeof(end), (uint8_t *)&end, false);
-        set_conn_params_slow();
-        s_conn_params_set = true;  // SLOW 이미 설정됨
+        // OTA 진행 중이면 SLOW 전환 보류 (FAST 유지)
+        if (!ble_ota_is_active()) {
+            set_conn_params_slow();
+            s_conn_params_set = true;
+        }
         // 동기화 완료 → 지연 마킹 예약
         s_mark_sent_pending = true;
         s_mark_to_offset = s_unsent_ring_offset;
@@ -831,6 +834,11 @@ static void gap_event_handler(esp_gap_ble_cb_event_t event,
                  param->update_conn_params.conn_int,
                  param->update_conn_params.latency,
                  param->update_conn_params.timeout);
+        // OTA 중에 SLOW 파라미터가 적용되면 FAST로 재요청
+        if (ble_ota_is_active() && param->update_conn_params.conn_int > 0x20) {
+            ESP_LOGW(TAG, "OTA active but slow params applied — requesting FAST");
+            set_conn_params_fast();
+        }
         break;
 
     default:
