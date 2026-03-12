@@ -679,6 +679,15 @@ static void gatts_event_handler(esp_gatts_cb_event_t event,
             // OTA_CONTROL Write
             else if (handle == s_hdl_ota_control && len >= 1) {
                 ble_ota_handle_control(val, len);
+                // OTA 시작 시 고속 연결, 종료 시 저속 복원
+                if (ble_ota_is_active()) {
+                    set_conn_params_fast();
+                    s_conn_params_set = false; // OTA 종료 후 SLOW 재설정 허용
+                } else if (val[0] != OTA_CMD_START) {
+                    // COMMIT/ABORT 후 → 저속 복원
+                    set_conn_params_slow();
+                    s_conn_params_set = true;
+                }
             }
             // OTA_DATA Write (Write Without Response)
             else if (handle == s_hdl_ota_data && len > 0) {
@@ -948,9 +957,9 @@ void ble_server_notify_realtime(const sensor_data_t *data, uint32_t timestamp,
     if (s_hdl_realtime == 0) return;
 
     // 첫 REALTIME notify 시 SLOW 전환
-    // 단, sync 중이거나 미전송 100건 이상이면 보류 (FAST 협상 지연 방지)
+    // 단, sync 중이거나 미전송 100건 이상이거나 OTA 중이면 보류
     if (!s_conn_params_set && !s_unsent_sync_active &&
-        spiffs_logger_unsent_count() < 100) {
+        !ble_ota_is_active() && spiffs_logger_unsent_count() < 100) {
         s_conn_params_set = true;
         set_conn_params_slow();
     }
