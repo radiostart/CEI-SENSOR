@@ -264,7 +264,7 @@ static void handle_active_state(void) {
     static uint8_t s_ota_last_disp_pct = 0xFF;
     for (int t = 0; t < 10000; ) {
       if (power_manager_handle_button()) { /* 버튼 무시, 이벤트만 소비 */ }
-      uint8_t ota_st, ota_pct;
+      uint8_t ota_st = 0, ota_pct = 0;
       if (ble_server_process_ota(&ota_st, &ota_pct)) {
         // 상태 변경 또는 5% 단위로만 디스플레이 갱신
         bool disp_update = (ota_st != 2)  // 상태 변경 (READY/VERIFY/SUCCESS/ERROR)
@@ -284,6 +284,7 @@ static void handle_active_state(void) {
           vTaskDelay(pdMS_TO_TICKS(3000));
         }
         ui_reset_ota_render();
+        power_manager_request_update();  // 다음 사이클에서 측정 화면 강제 갱신
         break;
       }
       vTaskDelay(pdMS_TO_TICKS(20));
