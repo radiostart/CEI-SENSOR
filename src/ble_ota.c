@@ -68,8 +68,11 @@ void ble_ota_handle_control(const uint8_t *data, uint16_t len) {
         ESP_LOGI(TAG, "OTA START: size=%u bytes", (unsigned)total_size);
 
         // 배터리 잔량 부족 시 OTA 거부 (USB 연결 시 제외)
+        // BLE 콜백에서 호출되므로 ADC init/deinit 필요
         if (!battery_is_usb_connected()) {
+            battery_monitor_init();
             int bat_pct = battery_get_percentage();
+            battery_monitor_deinit();
             if (bat_pct < 20) {
                 ESP_LOGW(TAG, "Battery too low for OTA: %d%%", bat_pct);
                 set_state(OTA_STATE_ERROR, OTA_ERR_ABORTED);

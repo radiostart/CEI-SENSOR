@@ -34,7 +34,7 @@ extern "C" {
 // ============================================================
 #define APP_BUTTON_PIN          GPIO_NUM_3
 #define APP_BUTTON_HOLD_TIME_MS 3000  // 전원 OFF 홀드 시간
-#define APP_BUTTON_POWERON_MS   200   // 전원 ON 홀드 시간 (부팅 시간이 디바운스 역할)
+#define APP_BUTTON_POWERON_MS   2000  // 전원 ON 홀드 시간 (2초 홀드 시 자동 기동)
 
 // ============================================================
 // USB 전원 감지 (BQ24075 PGOOD)

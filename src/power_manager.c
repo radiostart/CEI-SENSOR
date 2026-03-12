@@ -80,9 +80,21 @@ void power_manager_init(void) {
         enter_off_deep_sleep();
       }
 
-      // 버튼이 아직 눌려있으면 릴리즈 대기 (깔끔한 전원 ON)
+      // 2초 홀드 확인: 누르고 있으면 2초 후 자동 기동, 그 전에 떼면 다시 딥슬립
       if (button_is_pressed()) {
-        button_wait_release();
+        bool held = button_wait_hold(APP_BUTTON_POWERON_MS);
+        if (held) {
+          // 2초 홀드 완료 → 즉시 전원 ON
+        } else {
+          // 2초 전에 뗌 → 다시 딥슬립
+          ESP_LOGI(TAG, "Button released too early → back to deep sleep");
+          enter_off_deep_sleep();
+        }
+      }
+      // 부팅 중 이미 떼어진 경우 (부팅 ~300ms): 짧은 누름 → 다시 딥슬립
+      else {
+        ESP_LOGI(TAG, "Button already released at boot → back to deep sleep");
+        enter_off_deep_sleep();
       }
       ESP_LOGI(TAG, "Power ON confirmed");
     } else {
