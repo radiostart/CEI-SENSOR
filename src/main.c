@@ -262,9 +262,9 @@ static void handle_active_state(void) {
 #if APP_ENABLE_OTA
   if (ble_server_is_ota_active()) {
     static uint8_t s_ota_last_disp_pct = 0xFF;
+    uint8_t ota_st = 0, ota_pct = 0;
     for (int t = 0; t < 10000; ) {
       if (power_manager_handle_button()) { /* 버튼 무시, 이벤트만 소비 */ }
-      uint8_t ota_st = 0, ota_pct = 0;
       if (ble_server_process_ota(&ota_st, &ota_pct)) {
         // 상태 변경 또는 5% 단위로만 디스플레이 갱신
         bool disp_update = (ota_st != 2)  // 상태 변경 (READY/VERIFY/SUCCESS/ERROR)
@@ -277,11 +277,11 @@ static void handle_active_state(void) {
       }
       if (!ble_server_is_ota_active()) {
         s_ota_last_disp_pct = 0xFF;
-        // ERROR 화면을 3초간 표시 후 측정 화면으로 복귀
+        // ERROR 화면을 5초간 표시 후 측정 화면으로 복귀
         if (ota_st == 5) {  // OTA_STATE_ERROR
           display_service_wakeup();
           ui_show_ota_progress(ota_st, ota_pct);
-          vTaskDelay(pdMS_TO_TICKS(3000));
+          vTaskDelay(pdMS_TO_TICKS(5000));
         }
         ui_reset_ota_render();
         power_manager_request_update();  // 다음 사이클에서 측정 화면 강제 갱신
