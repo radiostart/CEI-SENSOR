@@ -157,8 +157,8 @@ void ble_ota_handle_control(const uint8_t *data, uint16_t len) {
             ESP_LOGW(TAG, "START received in non-idle state: %d", s_state);
             if (s_state == OTA_STATE_RECEIVING || s_state == OTA_STATE_READY) {
                 esp_ota_abort(s_ota_handle);
-                stop_write_task();
             }
+            stop_write_task(); // 이전 태스크/링버퍼 정리 (어떤 상태든)
         }
 
         uint32_t total_size;
