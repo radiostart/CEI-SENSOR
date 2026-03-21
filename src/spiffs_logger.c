@@ -122,7 +122,7 @@ static esp_err_t ensure_log_file(void) {
     }
     remaining -= to_write;
     if (++yield_cnt >= 64) {
-      vTaskDelay(pdMS_TO_TICKS(1));
+      taskYIELD();
       yield_cnt = 0;
     }
   }
@@ -169,6 +169,13 @@ esp_err_t spiffs_logger_init(void) {
 
 esp_err_t spiffs_logger_append(float temp, float humidity, uint32_t timestamp) {
   if (!s_initialized) return ESP_ERR_INVALID_STATE;
+
+  // 최소 기록 간격 보장: 10초 미만이면 스킵 (버튼 등 조기 깨어남 방지)
+  static uint32_t s_last_ts = 0;
+  if (s_last_ts > 0 && timestamp > 0 && timestamp - s_last_ts < 10) {
+    return ESP_OK;
+  }
+  s_last_ts = timestamp;
 
   log_record_t rec = {
       .timestamp = timestamp,
@@ -223,6 +230,16 @@ uint32_t spiffs_logger_unsent_count(void) {
 
 uint32_t spiffs_logger_total_count(void) {
   return s_record_count;
+}
+
+uint32_t spiffs_logger_first_unsent_offset(void) {
+  // sent 레코드는 링 버퍼 앞부분, unsent는 뒷부분이므로 O(1) 추정 가능
+  // 링 버퍼 wraparound로 인해 앞부분에 새 unsent 레코드가 있을 수 있으므로
+  // 256레코드 여유를 두어 안전하게 시작
+  if (!s_initialized || s_unsent_count == 0) return s_record_count;
+  if (s_unsent_count >= s_record_count) return 0;
+  uint32_t estimated = s_record_count - s_unsent_count;
+  return (estimated > 256) ? (estimated - 256) : 0;
 }
 
 void spiffs_logger_get_usage(size_t *used, size_t *total) {
@@ -283,9 +300,11 @@ esp_err_t spiffs_logger_read_unsent_batch(uint32_t ring_offset,
   uint32_t start = (s_write_idx + APP_LOG_MAX_RECORDS - s_record_count) % APP_LOG_MAX_RECORDS;
   uint32_t collected = 0;
 
-  // 청크 단위 순차 읽기 (16레코드 = 256바이트, SPIFFS 페이지 크기 일치)
-  // 개별 fseek+fread 대비 ~8-10배 빠름
+  // 청크 단위 순차 읽기: 연속 구간은 fseek 1회 후 fread만 반복 (fseek 중복 제거)
+  // fseek가 SPIFFS에서 매우 느리므로 이 최적화가 핵심 성능 개선 포인트
   log_record_t chunk[MARK_CHUNK];
+  uint32_t yield_cnt = 0;
+  long expected_pos = -1;  // 파일 포인터 추적 (중복 fseek 제거용)
 
   for (uint32_t i = ring_offset; i < s_record_count && collected < max_count; ) {
     uint32_t remaining_records = s_record_count - i;
@@ -296,8 +315,12 @@ esp_err_t spiffs_logger_read_unsent_batch(uint32_t ring_offset,
 
     if (contiguous) {
       long off = (long)(first_idx * sizeof(log_record_t));
-      fseek(f, off, SEEK_SET);
+      // 파일 포인터가 이미 올바른 위치에 있으면 fseek 생략
+      if (off != expected_pos) {
+        fseek(f, off, SEEK_SET);
+      }
       size_t rd = fread(chunk, sizeof(log_record_t), chunk_n, f);
+      expected_pos = off + (long)(rd * sizeof(log_record_t));
       for (uint32_t j = 0; j < rd && collected < max_count; j++) {
         if (!chunk[j].sent) {
           records[collected] = chunk[j];
@@ -306,9 +329,10 @@ esp_err_t spiffs_logger_read_unsent_batch(uint32_t ring_offset,
         }
       }
       *next_offset = i + rd;
-      i += rd;
+      i += (rd > 0 ? rd : chunk_n);
     } else {
       // 링 버퍼 경계 교차: 개별 읽기 (드문 경우)
+      expected_pos = -1;
       for (uint32_t j = 0; j < chunk_n && collected < max_count; j++) {
         uint32_t idx = (start + i + j) % APP_LOG_MAX_RECORDS;
         fseek(f, (long)(idx * sizeof(log_record_t)), SEEK_SET);
@@ -324,9 +348,10 @@ esp_err_t spiffs_logger_read_unsent_batch(uint32_t ring_offset,
       i += chunk_n;
     }
 
-    // Watchdog 방지: 매 128레코드마다 yield
-    if ((i - ring_offset) >= 128 && ((i - ring_offset) & 127) < MARK_CHUNK) {
-      vTaskDelay(pdMS_TO_TICKS(1));
+    // Watchdog 방지: 16청크(256레코드)마다 1틱 yield (IDLE 태스크 실행 보장)
+    if (++yield_cnt >= 16) {
+      vTaskDelay(1);
+      yield_cnt = 0;
     }
   }
 
@@ -392,6 +417,8 @@ esp_err_t spiffs_logger_mark_range_sent(uint32_t from_offset, uint32_t to_offset
   uint32_t marked = 0;
 
   log_record_t chunk[MARK_CHUNK];
+  uint32_t yield_cnt = 0;
+  long expected_pos = -1;  // 파일 포인터 추적 (중복 fseek 제거용)
 
   for (uint32_t i = from_offset; i < to_offset; ) {
     uint32_t chunk_n = to_offset - i;
@@ -402,7 +429,9 @@ esp_err_t spiffs_logger_mark_range_sent(uint32_t from_offset, uint32_t to_offset
 
     if (contiguous) {
       long off = (long)(first_idx * sizeof(log_record_t));
-      fseek(f, off, SEEK_SET);
+      if (off != expected_pos) {
+        fseek(f, off, SEEK_SET);
+      }
       size_t rd = fread(chunk, sizeof(log_record_t), chunk_n, f);
       bool modified = false;
       for (uint32_t j = 0; j < rd; j++) {
@@ -415,8 +444,13 @@ esp_err_t spiffs_logger_mark_range_sent(uint32_t from_offset, uint32_t to_offset
       if (modified) {
         fseek(f, off, SEEK_SET);
         fwrite(chunk, sizeof(log_record_t), rd, f);
+        // fwrite 후 파일 포인터 위치 갱신
+        expected_pos = off + (long)(rd * sizeof(log_record_t));
+      } else {
+        expected_pos = off + (long)(rd * sizeof(log_record_t));
       }
     } else {
+      expected_pos = -1;
       for (uint32_t j = 0; j < chunk_n; j++) {
         uint32_t idx = (start + i + j) % APP_LOG_MAX_RECORDS;
         long off = (long)(idx * sizeof(log_record_t));
@@ -431,7 +465,10 @@ esp_err_t spiffs_logger_mark_range_sent(uint32_t from_offset, uint32_t to_offset
       }
     }
     i += chunk_n;
-    if ((i & 63) == 0) vTaskDelay(pdMS_TO_TICKS(1));
+    if (++yield_cnt >= 16) {
+      vTaskDelay(1);
+      yield_cnt = 0;
+    }
   }
 
   log_file_flush();
@@ -444,18 +481,23 @@ esp_err_t spiffs_logger_mark_range_sent(uint32_t from_offset, uint32_t to_offset
   return ESP_OK;
 }
 
-esp_err_t spiffs_logger_reset_sent_flags(void) {
+esp_err_t spiffs_logger_reset_range_sent(uint32_t from_offset, uint32_t to_offset) {
   if (!s_initialized || s_record_count == 0) return ESP_ERR_INVALID_STATE;
+  if (from_offset >= to_offset) return ESP_OK;
+  if (to_offset > s_record_count) to_offset = s_record_count;
 
   FILE *f = log_file_get();
   if (f == NULL) return ESP_FAIL;
 
   uint32_t start = (s_write_idx + APP_LOG_MAX_RECORDS - s_record_count) % APP_LOG_MAX_RECORDS;
+  uint32_t cleared = 0;
 
   log_record_t chunk[MARK_CHUNK];
+  uint32_t yield_cnt = 0;
+  long expected_pos = -1;
 
-  for (uint32_t i = 0; i < s_record_count; ) {
-    uint32_t chunk_n = s_record_count - i;
+  for (uint32_t i = from_offset; i < to_offset; ) {
+    uint32_t chunk_n = to_offset - i;
     if (chunk_n > MARK_CHUNK) chunk_n = MARK_CHUNK;
 
     uint32_t first_idx = (start + i) % APP_LOG_MAX_RECORDS;
@@ -463,20 +505,25 @@ esp_err_t spiffs_logger_reset_sent_flags(void) {
 
     if (contiguous) {
       long off = (long)(first_idx * sizeof(log_record_t));
-      fseek(f, off, SEEK_SET);
+      if (off != expected_pos) {
+        fseek(f, off, SEEK_SET);
+      }
       size_t rd = fread(chunk, sizeof(log_record_t), chunk_n, f);
       bool modified = false;
       for (uint32_t j = 0; j < rd; j++) {
         if (chunk[j].sent) {
           chunk[j].sent = 0;
           modified = true;
+          cleared++;
         }
       }
       if (modified) {
         fseek(f, off, SEEK_SET);
         fwrite(chunk, sizeof(log_record_t), rd, f);
       }
+      expected_pos = off + (long)(rd * sizeof(log_record_t));
     } else {
+      expected_pos = -1;
       for (uint32_t j = 0; j < chunk_n; j++) {
         uint32_t idx = (start + i + j) % APP_LOG_MAX_RECORDS;
         long off = (long)(idx * sizeof(log_record_t));
@@ -486,18 +533,39 @@ esp_err_t spiffs_logger_reset_sent_flags(void) {
           rec.sent = 0;
           fseek(f, off, SEEK_SET);
           fwrite(&rec, sizeof(log_record_t), 1, f);
+          cleared++;
         }
       }
     }
     i += chunk_n;
-    if ((i & 63) == 0) vTaskDelay(pdMS_TO_TICKS(1));
+    if (++yield_cnt >= 16) {
+      vTaskDelay(1);
+      yield_cnt = 0;
+    }
   }
 
-  log_file_flush();
-  s_unsent_count = s_record_count;
-  save_state_to_nvs();
-  ESP_LOGW(TAG, "Reset all %u sent flags to 0", (unsigned)s_record_count);
+  if (cleared > 0) {
+    s_unsent_count += cleared;
+    if (s_unsent_count > s_record_count) s_unsent_count = s_record_count;
+  }
   return ESP_OK;
+}
+
+esp_err_t spiffs_logger_reset_sent_flags(void) {
+  if (!s_initialized || s_record_count == 0) return ESP_ERR_INVALID_STATE;
+  esp_err_t rc = spiffs_logger_reset_range_sent(0, s_record_count);
+  if (rc == ESP_OK) {
+    log_file_flush();
+    s_unsent_count = s_record_count;
+    save_state_to_nvs();
+    ESP_LOGW(TAG, "Reset all %u sent flags to 0", (unsigned)s_record_count);
+  }
+  return rc;
+}
+
+void spiffs_logger_flush(void) {
+  log_file_flush();
+  save_state_to_nvs();
 }
 
 esp_err_t spiffs_logger_clear_all(void) {

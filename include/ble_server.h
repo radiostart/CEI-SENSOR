@@ -44,13 +44,17 @@ typedef struct __attribute__((packed)) {
 } ble_realtime_pkt_t;
 
 // UNSENT_DATA 청크 (20 bytes)
+// type별 패킷 해석:
+//   type=0 (data):        seq=시퀀스, timestamp/temp/humi/flags = 센서 데이터
+//   type=1 (end_of_data): seq=마지막 시퀀스, 나머지 필드 무시
+//   type=2 (header):      seq=0, timestamp=총 미전송 건수, 나머지 필드 무시
 typedef struct __attribute__((packed)) {
-  uint8_t  type;        // 0=data, 1=end_of_data
-  uint16_t seq;         // 시퀀스 번호
-  uint32_t timestamp;
+  uint8_t  type;        // 0=data, 1=end_of_data, 2=header
+  uint16_t seq;         // 시퀀스 번호 (0-based, uint16 wrap 허용)
+  uint32_t timestamp;   // type=0: unix timestamp, type=2: 총 건수
   int16_t  temp_x10;
   int16_t  humi_x10;
-  uint8_t  flags;
+  uint8_t  flags;       // bit7(0x80) = 배치 마지막 레코드 마커
   uint8_t  _pad[8];
 } ble_unsent_chunk_t;
 

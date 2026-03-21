@@ -257,6 +257,7 @@ static void handle_ble_pairing_mode(void) {
 // ============================================================
 static void handle_active_state(void) {
   sensor_data_t data;
+  int battery_pct = -1;
 
   // OTA 진행 중이면 센서/디스플레이 처리 건너뛰고 OTA 폴링만 수행
 #if APP_ENABLE_OTA
@@ -445,14 +446,15 @@ static void handle_active_state(void) {
   // 공정 진행 중이면 매 사이클 화면 갱신 (진행률/타이머 반영)
   bool process_running = s_proc_ctx.is_active && s_proc_ctx.duration_min > 0;
 
-  // 디스플레이 갱신 필요 여부 (센서 변화, 상태 전환, 공정 진행 시만)
+  // 디스플레이 갱신 필요 여부 (센서 변화, 상태 전환, 공정 진행, 동기화 중)
+  bool syncing_now = ble_server_is_syncing();
   bool need_display = significant_change || force_update || high_temp
-                      || process_running || sensor_state_changed;
+                      || process_running || sensor_state_changed || syncing_now;
 
   if (need_display) {
-    ESP_LOGI(TAG, ">>> UPDATE (change=%d, force=%d, hightemp=%d, proc=%d, sensor=%d) <<<",
+    ESP_LOGI(TAG, ">>> UPDATE (change=%d, force=%d, hightemp=%d, proc=%d, sensor=%d, sync=%d) <<<",
              significant_change, force_update, high_temp, process_running,
-             sensor_state_changed);
+             sensor_state_changed, syncing_now);
 
     sensor_service_update_last(&data);
 
@@ -466,7 +468,7 @@ static void handle_active_state(void) {
 
     // 배터리 측정 + 충전 상태
     battery_monitor_init();
-    int battery_pct = battery_get_percentage();
+    battery_pct = battery_get_percentage();
     bool usb_charging = battery_is_usb_connected();
     battery_monitor_deinit();
     display_service_set_charging(usb_charging);
@@ -503,13 +505,19 @@ static void handle_active_state(void) {
     }
 
     // 일반 BLE 브로드캐스트 창 (1.5초, 동기화 중이면 타이머 정지)
+    int64_t last_sync_measure_us = esp_timer_get_time();
     for (int t = 0; t < APP_BLE_BROADCAST_MS; ) {
       if (power_manager_handle_button()) {
-        ble_server_pause();
-        display_service_sleep();
-        return;
+        if (!ble_server_is_syncing()) {
+          ble_server_pause();
+          display_service_sleep();
+          return;
+        }
+        // 동기화 중 버튼: 즉시 측정 트리거
+        last_sync_measure_us = 0;
       }
       ble_server_process_unsent();
+      ble_server_process_reset_sent();
       ble_server_process_deferred_mark();
       ble_server_process_clear_data();
 #if APP_ENABLE_OTA
@@ -523,6 +531,23 @@ static void handle_active_state(void) {
 #endif
       bool syncing = ble_server_is_syncing();
       bool ota_active = ble_server_is_ota_active();
+
+      // 동기화 중 10초마다 센서 측정 + 로깅 + 화면 갱신
+      if (syncing && !ota_active) {
+        int64_t now_us = esp_timer_get_time();
+        if (now_us - last_sync_measure_us >= 10000000LL) {
+          last_sync_measure_us = now_us;
+          if (sensor_service_read(&data) == ESP_OK && data.valid) {
+            spiffs_logger_append(data.temperature, data.humidity, get_raw_timestamp());
+            ble_server_notify_realtime(&data, get_unix_timestamp(), get_elapsed_sec());
+          }
+          battery_monitor_init();
+          battery_pct = battery_get_percentage();
+          battery_monitor_deinit();
+          display_service_update(&data, battery_pct, &s_proc_ctx, get_elapsed_sec());
+        }
+      }
+
       int delay = (syncing || ota_active) ? 20 : 100;
       vTaskDelay(pdMS_TO_TICKS(delay));
       if (!syncing && !ota_active) t += delay;
@@ -572,8 +597,12 @@ static void handle_active_state(void) {
       // UNSENT 동기화 중: 20ms 폴링 (BLE ACK 즉시 처리)
       // 평시: 100ms 폴링 (절전)
       int total_ms = (int)(APP_SLEEP_DURATION_US / 1000);
+      int64_t last_sync_measure_us = esp_timer_get_time();
       for (int t = 0; t < total_ms; ) {
-        if (power_manager_handle_button()) return;
+        if (power_manager_handle_button()) {
+          if (!ble_server_is_syncing()) return;
+          last_sync_measure_us = 0;  // 동기화 중 버튼: 즉시 측정 트리거
+        }
         // 앱 구독 시작 → 즉시 다음 사이클로 (센서 데이터 즉시 전송)
         if (ble_server_consume_initial_sync()) {
           ESP_LOGI(TAG, "App subscribed → immediate cycle");
@@ -594,6 +623,25 @@ static void handle_active_state(void) {
 #endif
         bool syncing = ble_server_is_syncing();
         bool ota_active = ble_server_is_ota_active();
+
+        // 동기화 중 10초마다 센서 측정 + 로깅 + 화면 갱신
+        if (syncing && !ota_active) {
+          int64_t now_us = esp_timer_get_time();
+          if (now_us - last_sync_measure_us >= 10000000LL) {
+            last_sync_measure_us = now_us;
+            if (sensor_service_read(&data) == ESP_OK && data.valid) {
+              spiffs_logger_append(data.temperature, data.humidity, get_raw_timestamp());
+              ble_server_notify_realtime(&data, get_unix_timestamp(), get_elapsed_sec());
+            }
+            battery_monitor_init();
+            battery_pct = battery_get_percentage();
+            battery_monitor_deinit();
+            display_service_wakeup();
+            display_service_update(&data, battery_pct, &s_proc_ctx, get_elapsed_sec());
+            display_service_sleep();
+          }
+        }
+
         int delay = (syncing || ota_active) ? 20 : 100;
         vTaskDelay(pdMS_TO_TICKS(delay));
         // 동기화/OTA 중이면 타이머 정지 (다음 사이클 진입 방지 → watchdog 방지)

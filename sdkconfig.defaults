@@ -26,5 +26,9 @@ CONFIG_BT_BLE_42_FEATURES_SUPPORTED=y
 # --- Console (UART + USB JTAG secondary) ---
 CONFIG_ESP_CONSOLE_SECONDARY_USB_SERIAL_JTAG=y
 
+# --- Task Watchdog ---
+# SPIFFS 414KB 파일의 단일 fseek/fflush가 >5초 걸릴 수 있음 (페이지 캐시 O(n))
+CONFIG_ESP_TASK_WDT_TIMEOUT_S=15
+
 # --- Log ---
 CONFIG_LOG_DEFAULT_LEVEL_INFO=y

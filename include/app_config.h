@@ -72,7 +72,7 @@ extern "C" {
 // ============================================================
 #define APP_SPIFFS_BASE_PATH    "/spiffs"
 #define APP_SPIFFS_PARTITION    "spiffs"
-#define APP_LOG_MAX_RECORDS     25920  // 10초 간격 72시간 (72 * 3600 / 10)
+#define APP_LOG_MAX_RECORDS     8640   // 10초 간격 24시간 (24 * 3600 / 10)
 
 // ============================================================
 // 펌웨어 버전 (Git 태그에서 자동 추출, 폴백: 0.0.0)

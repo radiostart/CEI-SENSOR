@@ -2,7 +2,7 @@
  * @file spiffs_logger.h
  * @brief SPIFFS 기반 센서 데이터 로거 (링 버퍼)
  *
- * 최대 25920개 레코드 (10초 간격 × 72시간)
+ * 최대 8640개 레코드 (10초 간격 × 24시간)
  * 레코드 크기: 16 bytes (4+4+4+1+3 padding)
  */
 
@@ -58,6 +58,12 @@ uint32_t spiffs_logger_unsent_count(void);
  * @return 총 레코드 수
  */
 uint32_t spiffs_logger_total_count(void);
+
+/**
+ * @brief 첫 번째 미전송 레코드의 링 버퍼 오프셋 반환 (O(1))
+ * sent 레코드는 앞, unsent는 뒤에 있다는 가정 기반
+ */
+uint32_t spiffs_logger_first_unsent_offset(void);
 
 /**
  * @brief SPIFFS 사용량 조회 (bytes)
@@ -116,7 +122,9 @@ esp_err_t spiffs_logger_read_unsent_batch(uint32_t ring_offset,
  * @brief 모든 레코드의 sent 플래그를 0으로 리셋 (테스트/디버그용)
  * @return ESP_OK 성공
  */
+esp_err_t spiffs_logger_reset_range_sent(uint32_t from_offset, uint32_t to_offset);
 esp_err_t spiffs_logger_reset_sent_flags(void);
+void spiffs_logger_flush(void);
 
 /**
  * @brief 링 버퍼 오프셋 범위의 레코드를 sent=1로 일괄 표시

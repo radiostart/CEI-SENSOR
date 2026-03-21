@@ -31,9 +31,9 @@ void display_service_update(const sensor_data_t *data, int battery_pct,
     int16_t temp_x10 = (int16_t)(data->temperature * 10);
     int16_t hum_x10  = (int16_t)(data->humidity * 10);
     ui_update_from_sensors(temp_x10, hum_x10, data->high_temp_warn);
-    ESP_LOGD(TAG, "Display: T=%d.%d H=%d.%d warn=%d",
+    ESP_LOGI(TAG, "Display: T=%d.%d H=%d.%d batt=%d warn=%d",
              temp_x10 / 10, temp_x10 % 10, hum_x10 / 10, hum_x10 % 10,
-             data->high_temp_warn);
+             battery_pct, data->high_temp_warn);
   } else {
     ESP_LOGW(TAG, "No valid sensor data, showing '--'");
     ui_set_sensor_invalid();

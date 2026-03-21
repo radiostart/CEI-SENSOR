@@ -172,6 +172,7 @@ static bool s_unsent_header_pending = false;  // 헤더 ACK 대기 중
 static bool s_unsent_needs_processing = false;  // 메인 루프에서 처리 필요
 static bool s_unsent_start_pending = false;      // 초기 카운트+헤더 필요
 static bool s_reset_sent_pending = false;        // sent 리셋 요청 (메인 루프 처리)
+static uint32_t s_reset_current_offset = 0;     // 분할 reset 진행 위치
 static bool s_clear_data_pending = false;        // 데이터 전체 삭제 요청
 
 // 배치 전송 상태
@@ -183,10 +184,14 @@ static uint32_t s_unsent_ring_offset = 0;  // 링 버퍼 스캔 위치
 
 // 동기화 후 지연 마킹 (mark_sent를 sync 완료 후 일괄 처리)
 static bool s_mark_sent_pending = false;
+static bool s_sync_deferred = false;  // mark_sent 중 0x53 수신 시 완료 후 자동 시작
 // SLOW 파라미터 전환 플래그 (sync 미진행 시 첫 REALTIME notify에서 전환)
 static bool s_conn_params_set = false;
 static uint32_t s_mark_from_offset = 0;
 static uint32_t s_mark_to_offset = 0;
+static uint32_t s_mark_current_offset = 0;  // 분할 처리 진행 위치
+
+#define MARK_CHUNK_PER_CALL 256  // 매 polling 호출당 처리할 레코드 수 (~5ms)
 
 // ============================================================
 // 내부 헬퍼: 다음 Characteristic 등록
@@ -342,8 +347,9 @@ static void start_unsent_sync(void) {
     set_conn_params_fast();
     s_unsent_seq = 0;
     s_batch_count = 0;
-    s_unsent_ring_offset = 0;
-    s_mark_from_offset = 0;
+    // sent 레코드는 링 버퍼 앞부분이므로 첫 미전송 위치부터 스캔 (O(1))
+    s_unsent_ring_offset = spiffs_logger_first_unsent_offset();
+    s_mark_from_offset = s_unsent_ring_offset;
     s_unsent_sync_active = true;
     s_unsent_start_pending = true;
     s_unsent_needs_processing = true;
@@ -378,6 +384,7 @@ static void unsent_send_batch(void) {
         // 동기화 완료 → 지연 마킹 예약
         s_mark_sent_pending = true;
         s_mark_to_offset = s_unsent_ring_offset;
+        s_mark_current_offset = s_mark_from_offset;
         ESP_LOGI(TAG, "Unsent sync complete (total=%u), mark deferred (%u-%u)",
                  (unsigned)s_unsent_seq,
                  (unsigned)s_mark_from_offset, (unsigned)s_mark_to_offset);
@@ -391,7 +398,7 @@ static void unsent_send_batch(void) {
     bool tx_failed = false;
     for (uint32_t i = 0; i < s_batch_count; i++) {
         if (i > 0 && (i % TX_FLUSH_INTERVAL) == 0) {
-            vTaskDelay(pdMS_TO_TICKS(3));
+            vTaskDelay(1);  // 1 tick (10ms @100Hz) — TX 버퍼 비움
         }
 
         ble_unsent_chunk_t chunk;
@@ -409,8 +416,8 @@ static void unsent_send_batch(void) {
         esp_err_t ret = esp_ble_gatts_send_indicate(s_gatts_if, s_conn_id,
                             s_hdl_unsent, sizeof(chunk), (uint8_t *)&chunk, false);
         if (ret != ESP_OK) {
-            // TX queue full → yield 10ms 후 1회 재시도
-            vTaskDelay(pdMS_TO_TICKS(10));
+            // TX queue full → yield 후 1회 재시도
+            vTaskDelay(2);  // 2 ticks (20ms @100Hz)
             ret = esp_ble_gatts_send_indicate(s_gatts_if, s_conn_id,
                         s_hdl_unsent, sizeof(chunk), (uint8_t *)&chunk, false);
             if (ret != ESP_OK) {
@@ -574,6 +581,7 @@ static void gatts_event_handler(esp_gatts_cb_event_t event,
         s_unsent_header_pending = false;
         s_unsent_needs_processing = false;
         s_unsent_start_pending = false;
+        s_sync_deferred = false;
 #if APP_ENABLE_OTA
         s_notify_ota_status = false;
         ble_ota_reset();
@@ -608,9 +616,12 @@ static void gatts_event_handler(esp_gatts_cb_event_t event,
                 s_indicate_unsent = ((cccd & 0x0003) != 0);
                 ESP_LOGI(TAG, "UNSENT subscribe %s (cccd=0x%04x)",
                          s_indicate_unsent ? "ON" : "OFF", cccd);
-                if (s_indicate_unsent && !s_unsent_sync_active) {
+                if (s_indicate_unsent && !s_unsent_sync_active && !s_mark_sent_pending) {
                     start_unsent_sync();
                     ESP_LOGI(TAG, "UNSENT sync requested (deferred to main loop)");
+                } else if (s_indicate_unsent && s_mark_sent_pending) {
+                    s_sync_deferred = true;
+                    ESP_LOGW(TAG, "UNSENT sync deferred: mark_sent in progress");
                 }
             }
             // UNSENT_DATA Write (앱 ACK) — 플래그만 설정, SPIFFS I/O는 메인 루프
@@ -620,6 +631,7 @@ static void gatts_event_handler(esp_gatts_cb_event_t event,
             // UNSENT_DATA Write (sent 플래그 리셋 명령: 0x52 = 'R')
             else if (handle == s_hdl_unsent && len >= 1 && val[0] == 0x52) {
                 s_reset_sent_pending = true;
+                s_reset_current_offset = 0;
                 ESP_LOGI(TAG, "Sent flags reset requested (deferred)");
             }
             // UNSENT_DATA Write (데이터 전체 삭제: 0x44 = 'D')
@@ -629,9 +641,12 @@ static void gatts_event_handler(esp_gatts_cb_event_t event,
             }
             // UNSENT_DATA Write (재동기화 명령: 0x53 = 'S')
             else if (handle == s_hdl_unsent && len >= 1 && val[0] == 0x53) {
-                if (s_indicate_unsent && !s_unsent_sync_active) {
+                if (s_indicate_unsent && !s_unsent_sync_active && !s_mark_sent_pending) {
                     start_unsent_sync();
                     ESP_LOGI(TAG, "UNSENT resync requested (0x53)");
+                } else if (s_mark_sent_pending) {
+                    s_sync_deferred = true;
+                    ESP_LOGW(TAG, "UNSENT resync (0x53) deferred: mark_sent in progress");
                 }
             }
             // DEVICE_NAME Write
@@ -786,7 +801,6 @@ static void gatts_event_handler(esp_gatts_cb_event_t event,
     }
 
     case ESP_GATTS_CONF_EVT:
-        // Indication confirmed (GATT-level ACK)
         ESP_LOGD(TAG, "Indication confirmed");
         break;
 
@@ -1035,13 +1049,15 @@ bool ble_server_process_unsent(void) {
             // FAST 전환은 CCCD 구독 시점에 이미 요청됨
             ble_unsent_chunk_t hdr;
             memset(&hdr, 0, sizeof(hdr));
-            hdr.type = 2;  // header
-            hdr.seq  = 0;
-            hdr.timestamp = total;
-            s_unsent_header_pending = true;
+            hdr.type = 2;       // header: 동기화 시작 알림
+            hdr.seq  = 0;       // header에서는 미사용
+            hdr.timestamp = total;  // type=2에서는 총 미전송 건수로 사용
             ESP_LOGI(TAG, "Unsent sync start: total=%u", (unsigned)total);
+            // 헤더를 Notify로 전송 (앱이 CCCD=0x0001 Notify 구독)
             esp_ble_gatts_send_indicate(s_gatts_if, s_conn_id,
-                s_hdl_unsent, sizeof(hdr), (uint8_t *)&hdr, true);
+                s_hdl_unsent, sizeof(hdr), (uint8_t *)&hdr, false);
+            // 헤더 전송 후 즉시 첫 배치 전송 (Indicate ACK 불필요)
+            s_unsent_needs_processing = true;
         } else {
             // 미전송 없음 → 즉시 end_of_data
             ble_unsent_chunk_t end;
@@ -1056,14 +1072,7 @@ bool ble_server_process_unsent(void) {
         return true;
     }
 
-    // 헤더 ACK → 첫 배치 전송
-    if (s_unsent_header_pending) {
-        s_unsent_header_pending = false;
-        unsent_send_batch();
-        return true;
-    }
-
-    // 배치 ACK → mark_sent 생략 (sync 완료 후 일괄 처리) → 다음 배치 즉시 전송
+    // 배치 ACK (또는 헤더 후 첫 배치) → 다음 배치 전송
     {
         s_unsent_seq += s_batch_count;
         s_batch_count = 0;
@@ -1075,14 +1084,31 @@ bool ble_server_process_unsent(void) {
 
 bool ble_server_process_reset_sent(void) {
     if (!s_reset_sent_pending) return false;
-    s_reset_sent_pending = false;
-    ESP_LOGW(TAG, "Executing sent flags reset...");
-    esp_err_t rc = spiffs_logger_reset_sent_flags();
-    if (rc != ESP_OK) {
-        ESP_LOGE(TAG, "Sent flags reset failed: %s", esp_err_to_name(rc));
-    } else {
-        ESP_LOGW(TAG, "Sent flags reset complete");
+
+    uint32_t total = spiffs_logger_total_count();
+
+    // 처음 호출 시 로그
+    if (s_reset_current_offset == 0) {
+        ESP_LOGW(TAG, "Executing sent flags reset...");
     }
+
+    // 이번 호출에서 처리할 범위 (최대 MARK_CHUNK_PER_CALL 레코드)
+    uint32_t chunk_end = s_reset_current_offset + MARK_CHUNK_PER_CALL;
+    if (chunk_end > total) chunk_end = total;
+
+    spiffs_logger_reset_range_sent(s_reset_current_offset, chunk_end);
+    s_reset_current_offset = chunk_end;
+
+    if (s_reset_current_offset < total) {
+        return true;  // 아직 진행 중
+    }
+
+    // 전체 완료
+    s_reset_sent_pending = false;
+    s_reset_current_offset = 0;
+    spiffs_logger_flush();
+
+    ESP_LOGW(TAG, "Sent flags reset complete");
 
     // 리셋 완료 알림: UNSENT_DATA에 0x52 응답 (앱이 재구독 타이밍 판단)
     if (s_is_connected && s_indicate_unsent && s_hdl_unsent != 0) {
@@ -1115,13 +1141,32 @@ bool ble_server_process_clear_data(void) {
 
 bool ble_server_process_deferred_mark(void) {
     if (!s_mark_sent_pending) return false;
-    s_mark_sent_pending = false;
-    ESP_LOGI(TAG, "Deferred mark_sent: range %u-%u",
-             (unsigned)s_mark_from_offset, (unsigned)s_mark_to_offset);
-    int64_t t0 = esp_timer_get_time();
-    spiffs_logger_mark_range_sent(s_mark_from_offset, s_mark_to_offset);
-    int64_t t1 = esp_timer_get_time();
-    ESP_LOGI(TAG, "Deferred mark_sent done: %lldms", (t1 - t0) / 1000);
+
+    // 처음 호출 시 로그 출력 및 시작 위치 초기화
+    if (s_mark_current_offset == s_mark_from_offset) {
+        ESP_LOGI(TAG, "Deferred mark_sent: range %u-%u",
+                 (unsigned)s_mark_from_offset, (unsigned)s_mark_to_offset);
+    }
+
+    // 이번 호출에서 처리할 끝 위치 (최대 MARK_CHUNK_PER_CALL 레코드)
+    uint32_t chunk_end = s_mark_current_offset + MARK_CHUNK_PER_CALL;
+    if (chunk_end > s_mark_to_offset) chunk_end = s_mark_to_offset;
+
+    spiffs_logger_mark_range_sent(s_mark_current_offset, chunk_end);
+    s_mark_current_offset = chunk_end;
+
+    if (s_mark_current_offset >= s_mark_to_offset) {
+        // 전체 완료
+        s_mark_sent_pending = false;
+        ESP_LOGI(TAG, "Deferred mark_sent done (%u records)",
+                 (unsigned)(s_mark_to_offset - s_mark_from_offset));
+        // mark_sent 중 수신된 sync 요청 자동 재시작
+        if (s_sync_deferred && s_indicate_unsent && !s_unsent_sync_active) {
+            s_sync_deferred = false;
+            start_unsent_sync();
+            ESP_LOGI(TAG, "Deferred sync started after mark_sent complete");
+        }
+    }
     return true;
 }
 
